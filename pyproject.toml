@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src"]
+
+[project]
+name = "lbo-valuation-engine"
+version = "0.1.0"
+description = "Automated M&A / PE valuation engine: 10-K extraction, 3-statement model, DCF and LBO."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "pandas>=2.2",
+    "openpyxl>=3.1",
+    "pypdf>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+memo = ["anthropic>=0.40"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

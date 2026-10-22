@@ -1,0 +1,24 @@
+{
+  "valuation_date": "2015-09-26",
+  "risk_free_rate": 0.0213,
+  "equity_risk_premium": 0.060,
+  "levered_beta": 1.00,
+  "pre_tax_cost_of_debt": null,
+  "marginal_tax_rate": 0.264,
+  "terminal_growth_rate": 0.025,
+  "exit_ev_ebitda_multiple": 10.0,
+  "forecast_years": 5,
+  "share_price": 114.71,
+  "sources": {
+    "valuation_date": "Apple FY2015 balance sheet date (10-K cover page).",
+    "risk_free_rate": "10Y US Treasury yield, late Sep-2015 (approx.). VERIFY against FRED series DGS10 for 2015-09-25.",
+    "equity_risk_premium": "Damodaran implied US ERP, ~6.0% in autumn 2015 (approx.). VERIFY against Damodaran's historical implied ERP table.",
+    "levered_beta": "Placeholder of 1.00 pending a 2Y weekly / 5Y monthly regression of AAPL vs. S&P 500.",
+    "pre_tax_cost_of_debt": "Null = derive from the 10-K debt schedule (weighted-average effective rate).",
+    "marginal_tax_rate": "FY2015 effective tax rate of 26.4% (10-K, Provision for Income Taxes).",
+    "terminal_growth_rate": "Base-case assumption: long-run nominal GDP growth proxy.",
+    "exit_ev_ebitda_multiple": "Base-case assumption; to be benchmarked against large-cap hardware / tech comps.",
+    "forecast_years": "Standard 5-year projection period / LBO hold.",
+    "share_price": "AAPL closing price on 2015-09-25, last trading day of FY2015 (approx.). VERIFY against market data."
+  }
+}

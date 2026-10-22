@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+
+# Generated artefacts (re-create with the CLI)
+outputs/extracted/*.json
+outputs/*.xlsx
+outputs/*.md
+!outputs/.gitkeep
+!outputs/extracted/.gitkeep
+
+# Original download; the canonical copy lives in data/raw/
+/Form 10-K.pdf
