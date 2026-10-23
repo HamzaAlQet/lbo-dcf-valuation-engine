@@ -17,5 +17,8 @@ outputs/*.json
 !outputs/memo.md
 !outputs/extracted/.gitkeep
 
+# Secrets: API keys live in environment variables or Streamlit secrets, never in the repo
+.streamlit/secrets.toml
+
 # Original download; the canonical copy lives in data/raw/
 /Form 10-K.pdf
