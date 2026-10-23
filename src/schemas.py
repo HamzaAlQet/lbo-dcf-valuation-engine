@@ -39,7 +39,7 @@ from collections.abc import Iterable
 from datetime import date
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
@@ -149,7 +149,7 @@ class IncomeStatement(StrictModel):
     eps_diluted: Money | None = None
     dividends_per_share: NonNegMoney | None = None
 
-    _OPEX: ClassVar[tuple[str, ...]] = (
+    OPEX: ClassVar[tuple[str, ...]] = (
         "research_and_development",
         "selling_general_administrative",
     )
@@ -164,7 +164,7 @@ class IncomeStatement(StrictModel):
                 ("Gross margin = Net sales - COGS",
                  self.gross_margin, self.net_sales - self.cost_of_sales),
                 ("Total opex = R&D + SG&A",
-                 self.total_operating_expenses, self._sum(self._OPEX)),
+                 self.total_operating_expenses, self._sum(self.OPEX)),
                 ("Operating income = Gross margin - Total opex",
                  self.operating_income, self.gross_margin - self.total_operating_expenses),
                 ("Pre-tax income = Operating income + Other income",
@@ -251,23 +251,23 @@ class BalanceSheet(StrictModel):
     total_equity: Money
     total_liabilities_and_equity: NonNegMoney
 
-    _CURRENT_ASSETS: ClassVar[tuple[str, ...]] = (
+    CURRENT_ASSETS: ClassVar[tuple[str, ...]] = (
         "cash_and_equivalents", "short_term_investments", "accounts_receivable",
         "inventories", "deferred_tax_assets_current", "vendor_non_trade_receivables",
         "other_current_assets",
     )
-    _NON_CURRENT_ASSETS: ClassVar[tuple[str, ...]] = (
+    NON_CURRENT_ASSETS: ClassVar[tuple[str, ...]] = (
         "long_term_investments", "ppe_net", "goodwill", "intangible_assets",
         "other_non_current_assets",
     )
-    _CURRENT_LIABILITIES: ClassVar[tuple[str, ...]] = (
+    CURRENT_LIABILITIES: ClassVar[tuple[str, ...]] = (
         "accounts_payable", "accrued_expenses", "deferred_revenue_current",
         "commercial_paper", "current_portion_long_term_debt",
     )
-    _NON_CURRENT_LIABILITIES: ClassVar[tuple[str, ...]] = (
+    NON_CURRENT_LIABILITIES: ClassVar[tuple[str, ...]] = (
         "deferred_revenue_non_current", "long_term_debt", "other_non_current_liabilities",
     )
-    _EQUITY: ClassVar[tuple[str, ...]] = (
+    EQUITY: ClassVar[tuple[str, ...]] = (
         "common_stock_and_apic", "retained_earnings",
         "accumulated_other_comprehensive_income",
     )
@@ -279,17 +279,17 @@ class BalanceSheet(StrictModel):
             f"Balance Sheet FY{self.fiscal_year}",
             [
                 ("Total current assets = sum of current assets",
-                 self.total_current_assets, self._sum(self._CURRENT_ASSETS)),
+                 self.total_current_assets, self._sum(self.CURRENT_ASSETS)),
                 ("Total assets = Current + Non-current assets",
                  self.total_assets,
-                 self.total_current_assets + self._sum(self._NON_CURRENT_ASSETS)),
+                 self.total_current_assets + self._sum(self.NON_CURRENT_ASSETS)),
                 ("Total current liabilities = sum of current liabilities",
-                 self.total_current_liabilities, self._sum(self._CURRENT_LIABILITIES)),
+                 self.total_current_liabilities, self._sum(self.CURRENT_LIABILITIES)),
                 ("Total liabilities = Current + Non-current liabilities",
                  self.total_liabilities,
-                 self.total_current_liabilities + self._sum(self._NON_CURRENT_LIABILITIES)),
+                 self.total_current_liabilities + self._sum(self.NON_CURRENT_LIABILITIES)),
                 ("Total equity = APIC + Retained earnings + AOCI",
-                 self.total_equity, self._sum(self._EQUITY)),
+                 self.total_equity, self._sum(self.EQUITY)),
                 ("Total L&E = Total liabilities + Total equity",
                  self.total_liabilities_and_equity, self.total_liabilities + self.total_equity),
                 ("Assets = Liabilities + Equity",
@@ -388,21 +388,21 @@ class CashFlowStatement(StrictModel):
     cash_taxes_paid: NonNegMoney | None = None
     cash_interest_paid: NonNegMoney | None = None
 
-    _WORKING_CAPITAL: ClassVar[tuple[str, ...]] = (
+    WORKING_CAPITAL: ClassVar[tuple[str, ...]] = (
         "change_accounts_receivable", "change_inventories",
         "change_vendor_non_trade_receivables", "change_other_assets",
         "change_accounts_payable", "change_deferred_revenue", "change_other_liabilities",
     )
-    _OPERATING: ClassVar[tuple[str, ...]] = (
+    OPERATING: ClassVar[tuple[str, ...]] = (
         "net_income", "depreciation_and_amortization", "share_based_compensation",
-        "deferred_income_taxes", "other_non_cash_items", *_WORKING_CAPITAL,
+        "deferred_income_taxes", "other_non_cash_items", *WORKING_CAPITAL,
     )
-    _INVESTING: ClassVar[tuple[str, ...]] = (
+    INVESTING: ClassVar[tuple[str, ...]] = (
         "purchases_of_investments", "maturities_of_investments", "sales_of_investments",
         "acquisitions", "capital_expenditures", "purchases_of_intangibles",
         "other_investing",
     )
-    _FINANCING: ClassVar[tuple[str, ...]] = (
+    FINANCING: ClassVar[tuple[str, ...]] = (
         "proceeds_from_stock_issuance", "excess_tax_benefits",
         "taxes_on_net_share_settlement", "dividends_paid", "share_repurchases",
         "proceeds_from_debt_net", "repayment_of_debt", "change_in_commercial_paper",
@@ -416,11 +416,11 @@ class CashFlowStatement(StrictModel):
             f"Cash Flow Statement FY{self.fiscal_year}",
             [
                 ("CFO = sum of operating items",
-                 self.cash_from_operations, self._sum(self._OPERATING)),
+                 self.cash_from_operations, self._sum(self.OPERATING)),
                 ("CFI = sum of investing items",
-                 self.cash_from_investing, self._sum(self._INVESTING)),
+                 self.cash_from_investing, self._sum(self.INVESTING)),
                 ("CFF = sum of financing items",
-                 self.cash_from_financing, self._sum(self._FINANCING)),
+                 self.cash_from_financing, self._sum(self.FINANCING)),
                 ("Net change in cash = CFO + CFI + CFF",
                  self.net_change_in_cash,
                  self.cash_from_operations + self.cash_from_investing + self.cash_from_financing),
@@ -439,7 +439,7 @@ class CashFlowStatement(StrictModel):
     @property
     def working_capital_cash_flow(self) -> float:
         """Cash impact of working capital movements (positive = cash released)."""
-        return self._sum(self._WORKING_CAPITAL)
+        return self._sum(self.WORKING_CAPITAL)
 
     @property
     def change_in_nwc(self) -> float:
@@ -651,7 +651,7 @@ class DebtSchedule(StrictModel):
 # Market / macro assumptions
 # --------------------------------------------------------------------------------------
 class MacroAssumptions(StrictModel):
-    """Market inputs for valuation that are *not* found in the filing.
+    """Market inputs and DCF conventions that are *not* found in the filing.
 
     Each input should have a matching entry in ``sources`` so the model is auditable.
     """
@@ -660,12 +660,19 @@ class MacroAssumptions(StrictModel):
     risk_free_rate: float = Field(ge=0.0, le=0.20, description="10Y government yield")
     equity_risk_premium: float = Field(ge=0.0, le=0.20)
     levered_beta: float = Field(gt=0.0, le=5.0)
-    pre_tax_cost_of_debt: float | None = Field(default=None, ge=0.0, le=0.30)
+    pre_tax_cost_of_debt: float | None = Field(
+        default=None, ge=0.0, le=0.30, description="None = blended rate from debt schedule"
+    )
     marginal_tax_rate: float = Field(ge=0.0, le=0.60)
     terminal_growth_rate: float = Field(ge=-0.02, le=0.06)
     exit_ev_ebitda_multiple: float = Field(gt=0.0, le=40.0)
-    forecast_years: int = Field(default=5, ge=3, le=10)
-    share_price: float | None = Field(default=None, gt=0.0)
+    share_price: float = Field(gt=0.0)
+    mid_year_convention: bool = True
+    repatriation_tax_rate: float | None = Field(
+        default=None, ge=0.0, le=0.50,
+        description="None = implied from the filing (unrecognized DTL / undistributed earnings)",
+    )
+    deduct_repatriation_tax_in_equity_bridge: bool = True
     sources: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -683,8 +690,142 @@ class MacroAssumptions(StrictModel):
         """CAPM cost of equity = Rf + Beta x ERP."""
         return self.risk_free_rate + self.levered_beta * self.equity_risk_premium
 
+
+
+def _broadcast(value: Any, n: int, name: str) -> list[float]:
+    """Expand a scalar driver to ``n`` years, or check a list has length ``n``."""
+    if isinstance(value, (int, float)):
+        return [float(value)] * n
+    values = list(value)
+    if len(values) != n:
+        raise ValueError(f"{name}: expected {n} yearly values, got {len(values)}")
+    return values
+
+
+class OperatingAssumptions(StrictModel):
+    """Yearly operating drivers for the projection period.
+
+    Every per-year driver accepts either a scalar (held flat) or a list with one value
+    per projection year. Working-capital drivers left as ``None`` are held at the
+    base-year actual, so the default forecast carries no invented numbers.
+    """
+
+    projection_years: int = Field(default=5, ge=3, le=10)
+    revenue_growth: list[Annotated[float, Field(ge=-0.5, le=1.0)]]
+    gross_margin: list[Annotated[float, Field(gt=0.0, lt=1.0)]]
+    rd_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
+    sga_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
+    da_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
+    capex_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
+    tax_rate: list[Annotated[float, Field(ge=0.0, le=0.60)]]
+    dividend_payout_ratio: float = Field(default=0.0, ge=0.0, le=1.5)
+    buyback_pct_net_income: float = Field(default=0.0, ge=0.0, le=2.0)
+    interest_income_yield: float | None = Field(
+        default=None, ge=0.0, le=0.20, description="None = portfolio yield from the filing"
+    )
+    # Working capital (None = hold at base-year level)
+    receivable_days: float | None = Field(default=None, ge=0.0, le=365.0)
+    inventory_days: float | None = Field(default=None, ge=0.0, le=365.0)
+    payable_days: float | None = Field(default=None, ge=0.0, le=365.0)
+    vendor_receivables_pct_sales: float | None = Field(default=None, ge=0.0, le=1.0)
+    other_current_assets_pct_sales: float | None = Field(default=None, ge=0.0, le=1.0)
+    accrued_expenses_pct_sales: float | None = Field(default=None, ge=0.0, le=1.0)
+    deferred_revenue_pct_sales: float | None = Field(default=None, ge=0.0, le=1.0)
+    sources: dict[str, str] = Field(default_factory=dict)
+
+    PER_YEAR: ClassVar[tuple[str, ...]] = (
+        "revenue_growth", "gross_margin", "rd_pct_sales", "sga_pct_sales",
+        "da_pct_sales", "capex_pct_sales", "tax_rate",
+    )
+
+    @model_validator(mode="before")
     @classmethod
-    def from_json(cls, path: str | Path) -> MacroAssumptions:
+    def _broadcast_drivers(cls, data: Any) -> Any:
+        """Expand scalar drivers to one value per projection year."""
+        if isinstance(data, dict):
+            n = int(data.get("projection_years", 5))
+            data = dict(data)
+            for name in cls.PER_YEAR:
+                if name in data:
+                    data[name] = _broadcast(data[name], n, name)
+        return data
+
+    @model_validator(mode="after")
+    def _check_margin_stack(self) -> OperatingAssumptions:
+        """Gross margin must cover R&D and SG&A, or EBIT turns negative by construction."""
+        for i, (gm, rd, sga) in enumerate(
+            zip(self.gross_margin, self.rd_pct_sales, self.sga_pct_sales, strict=True)
+        ):
+            if rd + sga >= gm:
+                raise ValueError(
+                    f"Year {i + 1}: R&D ({rd:.1%}) + SG&A ({sga:.1%}) >= gross margin ({gm:.1%})"
+                )
+        return self
+
+
+class FinancingTrancheTerms(StrictModel):
+    """Terms of one new acquisition-debt tranche. List order = repayment priority."""
+
+    name: str = Field(min_length=1)
+    seniority: Seniority
+    share_of_debt: float = Field(gt=0.0, le=1.0, description="Share of total new debt")
+    interest_rate: float = Field(ge=0.0, le=0.25, description="All-in cash coupon")
+    mandatory_amortization_pct: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Annual % of original principal"
+    )
+    prepayable: bool = Field(default=True, description="Eligible for the cash sweep")
+
+
+class TransactionAssumptions(StrictModel):
+    """Leveraged buyout structure, financing terms and covenants."""
+
+    entry_ev_ebitda_multiple: float = Field(gt=0.0, le=40.0)
+    exit_ev_ebitda_multiple: float = Field(gt=0.0, le=40.0)
+    holding_period_years: int = Field(default=5, ge=1, le=10)
+    debt_pct_of_entry_ev: float = Field(ge=0.0, le=0.95, description="Leverage, % of entry EV")
+    tranches: list[FinancingTrancheTerms] = Field(min_length=1)
+    cash_sweep_pct: float = Field(default=1.0, ge=0.0, le=1.0)
+    minimum_cash: NonNegMoney = 0.0
+    advisory_fee_pct_ev: float = Field(default=0.0, ge=0.0, le=0.10)
+    financing_fee_pct_debt: float = Field(default=0.0, ge=0.0, le=0.10)
+    foreign_cash_usable_pct: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Share of offshore cash repatriated at close"
+    )
+    max_leverage_covenant: float = Field(gt=0.0, description="Max Total debt / EBITDA (x)")
+    min_interest_coverage_covenant: float = Field(gt=0.0, description="Min EBITDA / interest (x)")
+    sources: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_tranches(self) -> TransactionAssumptions:
+        """Tranche shares must sum to 100% and names must be unique."""
+        total = sum(t.share_of_debt for t in self.tranches)
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"Tranche shares of debt must sum to 100%, got {total:.2%}")
+        names = [t.name for t in self.tranches]
+        if len(names) != len(set(names)):
+            raise ValueError(f"Duplicate tranche names: {names}")
+        return self
+
+
+class ModelAssumptions(StrictModel):
+    """Complete assumption set: market, operating and transaction."""
+
+    market: MacroAssumptions
+    operating: OperatingAssumptions
+    transaction: TransactionAssumptions
+
+    @model_validator(mode="after")
+    def _check_horizons(self) -> ModelAssumptions:
+        """The LBO holding period must fit inside the projection period."""
+        if self.transaction.holding_period_years > self.operating.projection_years:
+            raise ValueError(
+                f"holding_period_years ({self.transaction.holding_period_years}) exceeds "
+                f"projection_years ({self.operating.projection_years})"
+            )
+        return self
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> ModelAssumptions:
         """Load and validate assumptions from a JSON file.
 
         Args:
@@ -725,6 +866,17 @@ class FinancialStatementSchema(StrictModel):
     reported_effective_tax_rates: dict[FiscalYear, Rate] = Field(default_factory=dict)
     statutory_tax_rate: float | None = Field(default=None, ge=0.0, le=0.60)
 
+    # Disclosures from the notes / MD&A, as of the latest fiscal year end
+    shares_outstanding: float | None = Field(default=None, gt=0.0, description="Millions")
+    foreign_cash_and_investments: NonNegMoney | None = Field(
+        default=None, description="Cash & securities held by foreign subsidiaries"
+    )
+    undistributed_foreign_earnings: NonNegMoney | None = None
+    unrecognized_repatriation_tax: NonNegMoney | None = Field(
+        default=None, description="Unrecognized deferred tax liability on foreign earnings"
+    )
+    investment_portfolio_yield: Rate | None = None
+
     @model_validator(mode="after")
     def _check_structure(self) -> FinancialStatementSchema:
         """Each statement list must hold unique fiscal years."""
@@ -737,6 +889,13 @@ class FinancialStatementSchema(StrictModel):
             years = [s.fiscal_year for s in items]
             if len(years) != len(set(years)):
                 raise ValueError(f"{label} contains duplicate fiscal years: {years}")
+        if self.foreign_cash_and_investments is not None:
+            latest = max(self.balance_sheets, key=lambda b: b.fiscal_year)
+            if self.foreign_cash_and_investments > latest.cash_and_investments + DEFAULT_TOLERANCE:
+                raise ValueError(
+                    f"Foreign cash ({self.foreign_cash_and_investments:,.0f}) exceeds total "
+                    f"cash and investments ({latest.cash_and_investments:,.0f})"
+                )
         return self
 
     @model_validator(mode="after")
@@ -823,6 +982,23 @@ class FinancialStatementSchema(StrictModel):
     def cash_flow_statement(self, year: int) -> CashFlowStatement:
         """Return the cash flow statement for ``year`` (``KeyError`` if absent)."""
         return {s.fiscal_year: s for s in self.cash_flow_statements}[year]
+
+    @property
+    def implied_repatriation_tax_rate(self) -> float | None:
+        """Tax cost of repatriating foreign earnings, as disclosed by the company:
+        unrecognized deferred tax liability / undistributed foreign earnings."""
+        if self.unrecognized_repatriation_tax is None or not self.undistributed_foreign_earnings:
+            return None
+        return self.unrecognized_repatriation_tax / self.undistributed_foreign_earnings
+
+    @property
+    def diluted_shares_outstanding(self) -> float:
+        """Shares for per-share value: period-end basic shares plus the latest year's
+        dilution (weighted diluted - weighted basic). Falls back to weighted diluted."""
+        inc = self.income_statement(max(self.years))
+        if self.shares_outstanding is None or inc.basic_shares is None:
+            return inc.diluted_shares
+        return self.shares_outstanding + (inc.diluted_shares - inc.basic_shares)
 
     def ebitda(self, year: int) -> float:
         """EBITDA = income-statement EBIT + cash-flow-statement D&A."""

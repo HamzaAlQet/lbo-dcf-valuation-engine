@@ -1,24 +1,95 @@
 {
-  "valuation_date": "2015-09-26",
-  "risk_free_rate": 0.0213,
-  "equity_risk_premium": 0.060,
-  "levered_beta": 1.00,
-  "pre_tax_cost_of_debt": null,
-  "marginal_tax_rate": 0.264,
-  "terminal_growth_rate": 0.025,
-  "exit_ev_ebitda_multiple": 10.0,
-  "forecast_years": 5,
-  "share_price": 114.71,
-  "sources": {
-    "valuation_date": "Apple FY2015 balance sheet date (10-K cover page).",
-    "risk_free_rate": "10Y US Treasury yield, late Sep-2015 (approx.). VERIFY against FRED series DGS10 for 2015-09-25.",
-    "equity_risk_premium": "Damodaran implied US ERP, ~6.0% in autumn 2015 (approx.). VERIFY against Damodaran's historical implied ERP table.",
-    "levered_beta": "Placeholder of 1.00 pending a 2Y weekly / 5Y monthly regression of AAPL vs. S&P 500.",
-    "pre_tax_cost_of_debt": "Null = derive from the 10-K debt schedule (weighted-average effective rate).",
-    "marginal_tax_rate": "FY2015 effective tax rate of 26.4% (10-K, Provision for Income Taxes).",
-    "terminal_growth_rate": "Base-case assumption: long-run nominal GDP growth proxy.",
-    "exit_ev_ebitda_multiple": "Base-case assumption; to be benchmarked against large-cap hardware / tech comps.",
-    "forecast_years": "Standard 5-year projection period / LBO hold.",
-    "share_price": "AAPL closing price on 2015-09-25, last trading day of FY2015 (approx.). VERIFY against market data."
+  "market": {
+    "valuation_date": "2015-09-26",
+    "risk_free_rate": 0.0213,
+    "equity_risk_premium": 0.060,
+    "levered_beta": 1.00,
+    "pre_tax_cost_of_debt": null,
+    "marginal_tax_rate": 0.264,
+    "terminal_growth_rate": 0.025,
+    "exit_ev_ebitda_multiple": 10.0,
+    "share_price": 114.71,
+    "mid_year_convention": true,
+    "repatriation_tax_rate": null,
+    "deduct_repatriation_tax_in_equity_bridge": true,
+    "sources": {
+      "valuation_date": "Apple FY2015 balance sheet date (10-K cover page).",
+      "risk_free_rate": "10Y US Treasury yield, late Sep-2015 (approx.). VERIFY against FRED series DGS10 for 2015-09-25.",
+      "equity_risk_premium": "Damodaran implied US ERP, ~6.0% in autumn 2015 (approx.). VERIFY against Damodaran's historical implied ERP table.",
+      "levered_beta": "Placeholder of 1.00 pending a 2Y weekly / 5Y monthly regression of AAPL vs. S&P 500.",
+      "pre_tax_cost_of_debt": "Null = blended effective rate of term debt and commercial paper from the 10-K debt note.",
+      "marginal_tax_rate": "FY2015 effective tax rate of 26.4% (10-K, Provision for Income Taxes).",
+      "terminal_growth_rate": "Base-case assumption: long-run nominal GDP growth proxy.",
+      "exit_ev_ebitda_multiple": "Base-case DCF terminal multiple; benchmark against large-cap hardware / tech comps.",
+      "share_price": "AAPL closing price on 2015-09-25, last trading day of FY2015 (approx.). VERIFY against market data.",
+      "repatriation_tax_rate": "Null = implied from the 10-K: $30.0B unrecognized deferred tax liability / $91.5B undistributed foreign earnings.",
+      "deduct_repatriation_tax_in_equity_bridge": "Offshore cash is valued net of the tax payable to bring it onshore."
+    }
+  },
+  "operating": {
+    "projection_years": 5,
+    "revenue_growth": [0.030, 0.040, 0.040, 0.035, 0.030],
+    "gross_margin": [0.400, 0.400, 0.395, 0.395, 0.390],
+    "rd_pct_sales": [0.037, 0.038, 0.039, 0.040, 0.040],
+    "sga_pct_sales": 0.062,
+    "da_pct_sales": 0.048,
+    "capex_pct_sales": [0.060, 0.055, 0.050, 0.050, 0.050],
+    "tax_rate": 0.264,
+    "dividend_payout_ratio": 0.22,
+    "buyback_pct_net_income": 0.65,
+    "interest_income_yield": null,
+    "sources": {
+      "revenue_growth": "Base case: low/mid single-digit growth as the iPhone 6 upgrade cycle normalises (FY2015 actual +27.9%, FY2014 +7.0%).",
+      "gross_margin": "FY2015 actual 40.1%; modest compression from mix and pricing.",
+      "rd_pct_sales": "FY2015 actual 3.5%; rising with new product categories.",
+      "sga_pct_sales": "FY2015 actual 6.1%.",
+      "da_pct_sales": "FY2015 actual 4.8%.",
+      "capex_pct_sales": "FY2015 actual 4.8%; elevated near-term for data centres and retail.",
+      "tax_rate": "FY2015 effective tax rate 26.4%.",
+      "dividend_payout_ratio": "FY2015 dividends paid / net income = 21.7%.",
+      "buyback_pct_net_income": "FY2015 repurchases / net income = 66.0%.",
+      "interest_income_yield": "Null = 1.49% weighted-average yield on cash and securities disclosed in the 10-K.",
+      "working_capital": "Days and %-of-sales drivers not listed here are held at FY2015 actual levels."
+    }
+  },
+  "transaction": {
+    "entry_ev_ebitda_multiple": 8.0,
+    "exit_ev_ebitda_multiple": 8.0,
+    "holding_period_years": 5,
+    "debt_pct_of_entry_ev": 0.50,
+    "tranches": [
+      {
+        "name": "Senior Term Loan B",
+        "seniority": "senior_secured",
+        "share_of_debt": 0.70,
+        "interest_rate": 0.055,
+        "mandatory_amortization_pct": 0.01,
+        "prepayable": true
+      },
+      {
+        "name": "Senior Subordinated Notes",
+        "seniority": "subordinated",
+        "share_of_debt": 0.30,
+        "interest_rate": 0.080,
+        "mandatory_amortization_pct": 0.0,
+        "prepayable": true
+      }
+    ],
+    "cash_sweep_pct": 1.0,
+    "minimum_cash": 10000,
+    "advisory_fee_pct_ev": 0.010,
+    "financing_fee_pct_debt": 0.020,
+    "foreign_cash_usable_pct": 0.0,
+    "max_leverage_covenant": 5.0,
+    "min_interest_coverage_covenant": 3.0,
+    "sources": {
+      "entry_ev_ebitda_multiple": "8.0x LTM EBITDA vs. ~6.3x unaffected trading multiple, i.e. a control premium (implied offer premium is a model output).",
+      "exit_ev_ebitda_multiple": "Exit at entry multiple: no multiple expansion assumed.",
+      "debt_pct_of_entry_ev": "50% debt / 50% equity, typical of large-cap sponsor deals.",
+      "tranches": "TLB at ~L+450 all-in 5.5% with 1% amortisation; sub notes 8.0% bullet. Sub notes assumed callable at par so the sweep can retire them after the TLB.",
+      "minimum_cash": "$10B operating cash floor.",
+      "foreign_cash_usable_pct": "Base case: offshore cash stays trapped (Apple's stated policy is indefinite reinvestment). It is valued after repatriation tax at exit.",
+      "covenants": "Illustrative maintenance covenants: max 5.0x leverage, min 3.0x interest coverage."
+    }
   }
 }

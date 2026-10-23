@@ -58,6 +58,26 @@ def test_fcf_rejects_bad_inputs(kwargs: dict[str, float], message: str) -> None:
         metrics.unlevered_free_cash_flow(**{**base, **kwargs})
 
 
+def test_irr_matches_closed_form_for_two_cash_flows() -> None:
+    # 100 -> 161.051 over five years is exactly 10% p.a.
+    assert metrics.irr([-100, 0, 0, 0, 0, 161.051]) == pytest.approx(0.10, abs=1e-9)
+    assert metrics.npv(0.10, [-100, 0, 0, 0, 0, 161.051]) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_irr_with_interim_distributions() -> None:
+    flows = [-100.0, 10.0, 10.0, 110.0]  # a par bond paying a 10% coupon
+    assert metrics.irr(flows) == pytest.approx(0.10, abs=1e-9)
+
+
+def test_irr_handles_total_loss_region() -> None:
+    assert metrics.irr([-100, 0, 0, 0, 0, 1]) == pytest.approx(0.01 ** 0.2 - 1, abs=1e-9)
+
+
+def test_irr_requires_sign_change() -> None:
+    with pytest.raises(ValueError, match="negative and one positive"):
+        metrics.irr([100, 10, 10])
+
+
 def test_safe_divide_and_effective_tax_rate() -> None:
     assert metrics.safe_divide(1, 0) == 0.0
     assert metrics.effective_tax_rate(19_121, 72_515) == pytest.approx(0.26368, abs=1e-5)

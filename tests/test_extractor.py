@@ -193,3 +193,11 @@ def test_apple_debt_schedule(apple: FinancialStatementSchema) -> None:
 def test_apple_tax_rates(apple: FinancialStatementSchema) -> None:
     assert apple.reported_effective_tax_rates == {2015: 0.264, 2014: 0.261, 2013: 0.262}
     assert apple.statutory_tax_rate == 0.35
+
+
+def test_apple_narrative_disclosures(apple: FinancialStatementSchema) -> None:
+    assert apple.shares_outstanding == pytest.approx(5_578.753)
+    assert apple.foreign_cash_and_investments == pytest.approx(186_900)
+    assert apple.undistributed_foreign_earnings == pytest.approx(91_500)
+    assert apple.unrecognized_repatriation_tax == pytest.approx(30_000)
+    assert apple.investment_portfolio_yield == 0.0149

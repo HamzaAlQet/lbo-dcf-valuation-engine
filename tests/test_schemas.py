@@ -21,6 +21,9 @@ from src.schemas import (
     IncomeStatement,
     InstrumentType,
     MacroAssumptions,
+    ModelAssumptions,
+    OperatingAssumptions,
+    TransactionAssumptions,
 )
 
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "assumptions.json"
@@ -217,11 +220,13 @@ def test_invalid_tranche_rejected(overrides: dict[str, Any], message: str) -> No
 # Macro assumptions
 # --------------------------------------------------------------------------------------
 def test_assumptions_config_loads() -> None:
-    macro = MacroAssumptions.from_json(CONFIG)
+    assumptions = ModelAssumptions.from_json(CONFIG)
+    macro = assumptions.market
     assert macro.cost_of_equity == pytest.approx(
         macro.risk_free_rate + macro.levered_beta * macro.equity_risk_premium
     )
     assert set(macro.sources) >= {"risk_free_rate", "equity_risk_premium", "levered_beta"}
+    assert len(assumptions.operating.revenue_growth) == assumptions.operating.projection_years
 
 
 def test_terminal_growth_must_be_below_cost_of_equity() -> None:
@@ -229,5 +234,49 @@ def test_terminal_growth_must_be_below_cost_of_equity() -> None:
         MacroAssumptions(
             valuation_date="2015-09-26", risk_free_rate=0.01, equity_risk_premium=0.02,
             levered_beta=1.0, marginal_tax_rate=0.25, terminal_growth_rate=0.04,
-            exit_ev_ebitda_multiple=10.0,
+            exit_ev_ebitda_multiple=10.0, share_price=100.0,
         )
+
+
+def _operating(**overrides: Any) -> dict[str, Any]:
+    base = {"revenue_growth": 0.03, "gross_margin": 0.40, "rd_pct_sales": 0.05,
+            "sga_pct_sales": 0.10, "da_pct_sales": 0.04, "capex_pct_sales": 0.05,
+            "tax_rate": 0.25}
+    return {**base, **overrides}
+
+
+def test_scalar_drivers_broadcast_to_projection_years() -> None:
+    op = OperatingAssumptions(**_operating(projection_years=7))
+    assert op.sga_pct_sales == [0.10] * 7
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"revenue_growth": [0.03, 0.04]}, "expected 5 yearly values"),
+        ({"gross_margin": 0.12}, "gross margin"),  # R&D + SG&A exceed gross margin
+    ],
+)
+def test_invalid_operating_assumptions(overrides: dict[str, Any], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        OperatingAssumptions(**_operating(**overrides))
+
+
+def test_tranche_shares_must_sum_to_one() -> None:
+    config = ModelAssumptions.from_json(CONFIG).transaction.model_dump()
+    config["tranches"][0]["share_of_debt"] = 0.5
+    with pytest.raises(ValidationError, match="sum to 100%"):
+        TransactionAssumptions(**config)
+
+
+def test_holding_period_cannot_exceed_projection() -> None:
+    config = ModelAssumptions.from_json(CONFIG).model_dump()
+    config["transaction"]["holding_period_years"] = 7
+    with pytest.raises(ValidationError, match="holding_period_years"):
+        ModelAssumptions.model_validate(config)
+
+
+def test_repatriation_tax_rate_implied_by_filing(apple: FinancialStatementSchema) -> None:
+    # $30.0B unrecognized deferred tax liability / $91.5B undistributed foreign earnings
+    assert apple.implied_repatriation_tax_rate == pytest.approx(30.0 / 91.5)
+    assert apple.diluted_shares_outstanding == pytest.approx(5_578.753 + 5_793.069 - 5_753.421)

@@ -69,6 +69,11 @@ class AccountingIdentityError(FinancialDataError):
         )
 
 
+class AssumptionError(FinancialDataError):
+    """Raised when assumptions are individually valid but jointly infeasible,
+    e.g. acquisition debt plus balance-sheet cash exceeding total uses of funds."""
+
+
 # --------------------------------------------------------------------------------------
 # Extraction
 # --------------------------------------------------------------------------------------

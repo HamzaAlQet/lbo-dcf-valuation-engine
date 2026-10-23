@@ -584,6 +584,7 @@ class TenKExtractor:
             ),
             "reported_effective_tax_rates": self._extract_effective_tax_rates(years),
             "statutory_tax_rate": self._extract_statutory_tax_rate(),
+            **self._extract_disclosures(),
         }
         schema = FinancialStatementSchema.model_validate(payload)
         logger.info("Extraction complete: %s FY%s-FY%s, all identities verified",
@@ -815,6 +816,44 @@ class TenKExtractor:
         m = re.search(rf"statutory federal income tax rate (?:of )?\(?({_RATE})%",
                       self.flat_text, re.I)
         return pct_to_decimal(m.group(1)) if m else None
+
+    # (field, regex on flat text, converter). The first capture group is the latest year.
+    _DISCLOSURES: tuple[tuple[str, str, Any], ...] = (
+        ("shares_outstanding",
+         r"([\d,]+) and [\d,]+ shares issued and outstanding",
+         lambda s: float(s.replace(",", "")) / 1_000),           # thousands -> millions
+        ("foreign_cash_and_investments",
+         rf"\$({_RATE}) billion(?: and \${_RATE} billion)?,? (?:respectively, )?of the "
+         r"Company's cash, cash equivalents and marketable securities were held by "
+         r"foreign subsidiaries",
+         lambda s: float(s) * 1_000),                             # billions -> millions
+        ("undistributed_foreign_earnings",
+         rf"income taxes have not been provided on a cumulative total of \$({_RATE}) billion",
+         lambda s: float(s) * 1_000),
+        ("unrecognized_repatriation_tax",
+         r"unrecognized deferred tax liability related to these temporary differences is "
+         rf"estimated to be (?:approximately )?\$({_RATE}) billion",
+         lambda s: float(s) * 1_000),
+        ("investment_portfolio_yield",
+         r"weighted-average interest rate earned by the Company on its cash, cash "
+         rf"equivalents and marketable securities was ({_RATE})%",
+         pct_to_decimal),
+    )
+
+    def _extract_disclosures(self) -> dict[str, float]:
+        """Narrative disclosures used by the valuation: shares outstanding, offshore
+        cash, the repatriation tax liability and the investment portfolio yield.
+
+        All are optional; anything not found is logged and left unset.
+        """
+        found: dict[str, float] = {}
+        for name, pattern, convert in self._DISCLOSURES:
+            m = re.search(pattern, self.flat_text, re.I)
+            if m:
+                found[name] = convert(m.group(1))
+            else:
+                logger.warning("Disclosure '%s' not found", name)
+        return found
 
     def _extract_metadata(self) -> dict[str, Any]:
         """Registrant name, fiscal year end and CIK from the cover page / EDGAR URL."""

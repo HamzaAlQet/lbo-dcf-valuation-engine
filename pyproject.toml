@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "formulas>=1.2"]
 memo = ["anthropic>=0.40"]
 
 [tool.pytest.ini_options]

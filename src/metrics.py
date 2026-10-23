@@ -114,6 +114,57 @@ def unlevered_free_cash_flow(
     return nopat(ebit, tax_rate) + depreciation_and_amortization - capex - change_in_nwc
 
 
+def npv(rate: float, cash_flows: list[float]) -> float:
+    """Net present value of annual cash flows, the first at t = 0.
+
+    Args:
+        rate: Discount rate per period as a decimal (> -1).
+        cash_flows: Cash flows at t = 0, 1, 2, ...
+
+    Returns:
+        NPV at ``rate``.
+    """
+    return sum(cf / (1.0 + rate) ** t for t, cf in enumerate(cash_flows))
+
+
+def irr(cash_flows: list[float], low: float = -0.99, high: float = 10.0,
+        tolerance: float = 1e-10, max_iterations: int = 500) -> float:
+    """Internal rate of return by bisection (same convention as Excel ``IRR``).
+
+    Bisection is slower than Newton's method but cannot diverge, which matters when
+    sensitivity tables push returns towards -100%.
+
+    Args:
+        cash_flows: Annual cash flows from t = 0; needs at least one sign change.
+        low: Lower bound of the search interval.
+        high: Upper bound of the search interval.
+        tolerance: Convergence tolerance on the rate.
+        max_iterations: Iteration cap.
+
+    Returns:
+        The IRR as a decimal.
+
+    Raises:
+        ValueError: If the cash flows have no sign change, or no root lies in the
+            interval ``[low, high]``.
+    """
+    if not (any(cf < 0 for cf in cash_flows) and any(cf > 0 for cf in cash_flows)):
+        raise ValueError("IRR needs at least one negative and one positive cash flow")
+    f_low = npv(low, cash_flows)
+    if f_low * npv(high, cash_flows) > 0:
+        raise ValueError(f"No IRR in [{low:.0%}, {high:.0%}] for cash flows {cash_flows}")
+    for _ in range(max_iterations):
+        mid = (low + high) / 2.0
+        f_mid = npv(mid, cash_flows)
+        if abs(high - low) < tolerance or f_mid == 0.0:
+            return mid
+        if f_low * f_mid < 0:
+            high = mid
+        else:
+            low, f_low = mid, f_mid
+    return (low + high) / 2.0
+
+
 def effective_tax_rate(income_tax_expense: float, pretax_income: float) -> float:
     """Compute the book effective tax rate = tax expense / pre-tax income.
 
