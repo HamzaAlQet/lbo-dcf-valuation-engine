@@ -1,0 +1,9 @@
+[theme]
+primaryColor = "#1F3864"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Uploads are not used; keep the request size small.
+maxUploadSize = 5

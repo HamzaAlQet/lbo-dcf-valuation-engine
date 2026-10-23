@@ -74,10 +74,11 @@ the repatriation tax.
 ```bash
 python -m venv .venv
 .venv/Scripts/activate            # Windows; use `source .venv/bin/activate` on macOS/Linux
-pip install -e ".[dev]"
+pip install -e ".[dev,memo,app]"
 
 python -m src.extractor data/raw/apple_10k_fy2015.pdf --ticker AAPL   # -> outputs/extracted/*.json
 python -m src.analyzer outputs/extracted/apple_inc_fy2015.json        # -> model.xlsx, memo.md, analysis.json
+streamlit run streamlit_app.py                                        # -> interactive dashboard
 pytest
 ```
 
@@ -90,6 +91,42 @@ every failed identity, if anything does not tie.
 the analyzer drafts the memo with Claude (`claude-opus-5-5`). Without credentials, or
 with `--offline`, it writes the same memo from a deterministic template and says so in
 the memo header.
+
+## Web app (`streamlit_app.py`)
+
+An interactive dashboard over the same engine:
+
+- **Opens on the sample.** Visitors land on the Apple base case and the committed
+  sample memo.
+- **The sidebar flexes the deal.** Entry and exit multiples, leverage, offshore cash
+  repatriation, growth and margin shifts, and the DCF inputs are all adjustable.
+- **Everything recomputes live.** Each change reruns the projection, DCF, LBO,
+  scenarios and sensitivities across six tabs: Overview, DCF, LBO, Scenarios, IC memo
+  and Downloads.
+- **Downloads match the screen.** The Excel model, memo and data pack are all built
+  for the assumptions currently shown.
+
+**Claude memos use the visitor's own API key.** The IC memo tab has a password field
+for an Anthropic API key:
+
+- **The app holds no key of its own.** It never reads `st.secrets` or the environment
+  for one, so hosting it costs the owner nothing.
+- **A visitor's key is used only for their request.** It is held in memory for their
+  browser session and never stored or logged.
+- **Problems are reported.** A rejected key or an unreachable API produces an error
+  message, never a silent template memo.
+
+**Deploy to Streamlit Community Cloud:**
+
+1. Push this repository to GitHub.
+2. On [share.streamlit.io](https://share.streamlit.io), click **Create app** and pick
+   the repository, branch `main` and main file `streamlit_app.py`.
+3. Under **Advanced settings**, choose Python 3.12 or later. Dependencies install from
+   `requirements.txt`.
+4. Leave **Secrets** empty: the app needs none.
+
+The first page load extracts the 10-K, which takes 10–20 seconds. The result is cached
+for every visitor after that.
 
 ## The Excel model (`outputs/model.xlsx`)
 
@@ -154,7 +191,10 @@ src/modeling_engine.py    3-statement projection, DCF, LBO, and CLI
 src/excel_export.py       Formula-driven openpyxl workbook
 src/analyzer.py           Scenarios, sensitivity grids, risk metrics, recommendation, CLI
 src/memo_generator.py     Claude prompt chain, memo validation, template fallback
-tests/                    133 pytest tests (Claude calls tested with a fake client)
+src/dashboard.py          Pure helpers for the web app: controls, charts, workbook bytes
+streamlit_app.py          Streamlit dashboard (entry point for Streamlit Community Cloud)
+requirements.txt          Runtime dependencies for the hosted app
+tests/                    142 pytest tests (Claude calls via a fake client; app via AppTest)
 outputs/                  Generated JSON, model.xlsx, memo.md, analysis.json
 ```
 

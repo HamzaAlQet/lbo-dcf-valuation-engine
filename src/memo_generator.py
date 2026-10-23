@@ -578,7 +578,8 @@ def _is_missing_credentials(exc: Exception) -> bool:
 
 
 def generate_memo(analysis: AnalysisResult, *, offline: bool = False,
-                  model: str | None = None, client: Any = None) -> Memo:
+                  model: str | None = None, client: Any = None,
+                  allow_template_fallback: bool = True) -> Memo:
     """Generate the IC memo with Claude, or from the template.
 
     Args:
@@ -586,14 +587,18 @@ def generate_memo(analysis: AnalysisResult, *, offline: bool = False,
         offline: Skip the API and use the deterministic template.
         model: Claude model id (default ``claude-opus-5-5``).
         client: An ``anthropic.Anthropic`` client (created if omitted).
+        allow_template_fallback: When credentials are missing or rejected, or the API
+            is unreachable, write the template memo (``True``, CLI behaviour) or raise
+            (``False``, for callers such as the web app that supply a user's key).
 
     Returns:
-        The memo. Falls back to the template, with a warning, when credentials are
-        missing or the API is unreachable.
+        The memo.
 
     Raises:
         MemoGenerationError: If Claude refuses, truncates, or produces a memo that
-            fails validation (these are content problems, so there is no silent fallback).
+            fails validation (these are content problems, so there is no silent
+            fallback), or on credential / connection errors when
+            ``allow_template_fallback`` is ``False``.
     """
     if offline:
         return Memo(markdown=assemble(analysis, template_body(analysis), "template"),
@@ -607,6 +612,14 @@ def generate_memo(analysis: AnalysisResult, *, offline: bool = False,
     except (anthropic.AuthenticationError, anthropic.APIConnectionError, TypeError) as exc:
         if isinstance(exc, TypeError) and not _is_missing_credentials(exc):
             raise
+        if not allow_template_fallback:
+            if isinstance(exc, anthropic.AuthenticationError):
+                reason = "the API key was rejected"
+            elif isinstance(exc, anthropic.APIConnectionError):
+                reason = "the Anthropic API could not be reached"
+            else:
+                reason = "no API key was provided"
+            raise MemoGenerationError(f"Claude memo not generated: {reason}.") from exc
         logger.warning("Claude unavailable (%s); writing the template memo instead. "
                        "Set ANTHROPIC_API_KEY to generate the narrative with Claude.",
                        type(exc).__name__)
