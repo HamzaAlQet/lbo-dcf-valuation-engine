@@ -12,6 +12,8 @@ outputs/*.xlsx
 outputs/*.md
 outputs/*.json
 !outputs/.gitkeep
+# Sample workbook (Apple FY2015) kept in the repo for reviewers
+!outputs/model.xlsx
 !outputs/extracted/.gitkeep
 
 # Original download; the canonical copy lives in data/raw/
