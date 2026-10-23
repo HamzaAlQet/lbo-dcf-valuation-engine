@@ -26,13 +26,15 @@ evaluate the workbook's formulas and prove that Excel and Python agree to the ce
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openpyxl import Workbook
+from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -43,6 +45,9 @@ from src.modeling_engine import (
     ValuationModel,
     blended_cost_of_debt,
 )
+
+if TYPE_CHECKING:  # analyzer imports nothing from here; the guard keeps imports one-way
+    from src.analyzer import AnalysisResult, SensitivityTable
 
 CellValue = Any
 """A number (input), a string starting with ``=`` (formula), text, or ``None``."""
@@ -184,8 +189,9 @@ class SheetSpec:
 class WorkbookBuilder:
     """Declares every sheet of the model, then renders them to an openpyxl workbook."""
 
-    def __init__(self, model: ValuationModel) -> None:
+    def __init__(self, model: ValuationModel, analysis: AnalysisResult | None = None) -> None:
         self.model = model
+        self.analysis = analysis
         self.schema = model.schema
         self.a = model.assumptions
         self.p = model.projection
@@ -232,6 +238,9 @@ class WorkbookBuilder:
         cover = wb.create_sheet("Cover")
         for spec in self.sheets.values():
             self._render(wb.create_sheet(spec.name), spec)
+        if self.analysis is not None:
+            self._render_sensitivity(wb.create_sheet("Sensitivity"))
+            self._render_scenarios(wb.create_sheet("Scenarios"))
         self._render_checks(wb.create_sheet("Checks"))
         self._render_cover(cover)
         return wb
@@ -1292,6 +1301,244 @@ class WorkbookBuilder:
         if isinstance(value, str) and not is_formula:
             cell.alignment = Alignment(horizontal="left")
 
+    # ================================================================= Phase 3 sheets
+    @staticmethod
+    def _sheet_frame(ws: Worksheet, title: str, subtitle: str, widths: dict[str, float]) -> None:
+        """Title, subtitle, gridlines and column widths for a free-form sheet."""
+        ws.sheet_view.showGridLines = True
+        for col, width in widths.items():
+            ws.column_dimensions[col].width = width
+        ws["B1"] = title
+        ws["B1"].font = Font(name=FONT_NAME, size=14, bold=True, color=NAVY)
+        ws["B2"] = subtitle
+        ws["B2"].font = Font(name=FONT_NAME, size=9, italic=True, color="595959")
+
+    @staticmethod
+    def _section_row(ws: Worksheet, row: int, text: str, last_col: int) -> None:
+        """Shaded section header across columns B..last_col."""
+        for c in range(2, last_col + 1):
+            cell = ws.cell(row=row, column=c)
+            cell.fill = PatternFill("solid", fgColor=SECTION_FILL)
+            cell.font = Font(name=FONT_NAME, bold=True, color=NAVY)
+        ws.cell(row=row, column=2, value=text)
+
+    def _render_grid(self, ws: Worksheet, top: int, table: SensitivityTable,
+                     row_axis: Callable[[int, float], CellValue],
+                     col_axis: Callable[[int, float], CellValue],
+                     cell: Callable[[str, str], CellValue] | None, note: str) -> int:
+        """Write one sensitivity grid; returns the next free row.
+
+        Args:
+            ws: Target sheet.
+            top: First row of the block.
+            table: Python-engine grid (axis values and expected outputs).
+            row_axis / col_axis: Axis cell content for step ``k`` (formula or value).
+            cell: Formula for a grid cell given its row-axis and column-axis cell
+                addresses; ``None`` writes the engine's values instead.
+            note: Explanation printed under the title.
+        """
+        value_fmt = {"price": PRICE, "pct": PCT, "multiple": '0.00"x"'}[table.value_format]
+        axis_fmt = {"pct": PCT, "multiple": MULT}
+        n_cols = len(table.cols)
+        last_col = 3 + n_cols
+        self._section_row(ws, top, table.title, last_col)
+        ws.cell(row=top + 1, column=2, value=note).font = Font(
+            name=FONT_NAME, size=9, italic=True, color="595959")
+        hdr = top + 2
+        corner = ws.cell(row=hdr, column=3, value=f"{table.row_label} ↓ / {table.col_label} →")
+        corner.font = Font(name=FONT_NAME, bold=True, size=9)
+        n_side = (len(table.cols) - 1) // 2
+        for j, c in enumerate(table.cols):
+            addr = f"{col_letter(4 + j)}{hdr}"
+            ws[addr] = col_axis(j - n_side, c)
+            ws[addr].number_format = axis_fmt[table.axis_formats[1]]
+            ws[addr].font = Font(name=FONT_NAME, bold=True, color="FFFFFF")
+            ws[addr].fill = PatternFill("solid", fgColor=NAVY)
+            if isinstance(ws[addr].value, str):
+                self.expected[f"{ws.title}!{addr}"] = c
+        m_side = (len(table.rows) - 1) // 2
+        for i, r in enumerate(table.rows):
+            row = hdr + 1 + i
+            raddr = f"C{row}"
+            ws[raddr] = row_axis(i - m_side, r)
+            ws[raddr].number_format = axis_fmt[table.axis_formats[0]]
+            ws[raddr].font = Font(name=FONT_NAME, bold=True, color="FFFFFF")
+            ws[raddr].fill = PatternFill("solid", fgColor=NAVY)
+            if isinstance(ws[raddr].value, str):
+                self.expected[f"{ws.title}!{raddr}"] = r
+            for j, c in enumerate(table.cols):
+                addr = f"{col_letter(4 + j)}{row}"
+                expected = float(table.values.at[r, c])
+                if cell is not None:
+                    ws[addr] = cell(f"$C{row}", f"{col_letter(4 + j)}${hdr}")
+                    font_color = "000000"
+                    if math.isfinite(expected):
+                        self.expected[f"{ws.title}!{addr}"] = expected
+                else:
+                    ws[addr] = expected if math.isfinite(expected) else "n.m."
+                    font_color = "404040"
+                ws[addr].number_format = value_fmt
+                is_base = math.isclose(r, table.base[0]) and math.isclose(c, table.base[1])
+                ws[addr].font = Font(name=FONT_NAME, color=font_color, bold=is_base,
+                                     italic=cell is None)
+                if is_base:
+                    ws[addr].border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        first, last = f"D{hdr + 1}", f"{col_letter(3 + n_cols)}{hdr + len(table.rows)}"
+        ws.conditional_formatting.add(f"{first}:{last}", ColorScaleRule(
+            start_type="min", start_color="F8696B", mid_type="percentile", mid_value=50,
+            mid_color="FFEB84", end_type="max", end_color="63BE7B"))
+        return hdr + len(table.rows) + 2
+
+    def _render_sensitivity(self, ws: Worksheet) -> None:
+        """DCF grids as live formulas; LBO grids as engine values; heat-mapped."""
+        assert self.analysis is not None
+        sens = self.analysis.sensitivities
+        self._sheet_frame(ws, f"{self.schema.metadata.name}: Sensitivity Analysis",
+                          "Heat maps: green = higher value. Base case outlined in bold.",
+                          {"A": 2, "B": 30, "C": 22, **{col_letter(i): 12 for i in range(4, 12)}})
+        x = lambda sheet, key, col: self.ref(sheet, key, col=col, absolute=True)  # noqa: E731
+        first, last = self.col(self.proj_years[0]), self.col(self.proj_years[-1])
+
+        def row_range(key: str) -> str:
+            r = self.sheets["DCF"].rows[key]
+            return f"'DCF'!${first}${r}:${last}${r}"
+
+        fcf, per = row_range("unlevered_fcf"), row_range("discount_period")
+        n_last = x("DCF", "period_index", last)
+        fcf_last = x("DCF", "unlevered_fcf", last)
+        ebitda_last = x("IS", "ebitda", last)
+        bridge = "+".join(x("DCF", k, "D") for k in ("plus_cash", "less_debt",
+                                                    "less_repatriation_tax"))
+        shares = x("DCF", "shares", "D")
+
+        steps = [("wacc_step", "WACC step", sens.dcf_wacc_growth, 0, PCT2),
+                 ("growth_step", "Terminal growth step", sens.dcf_wacc_growth, 1, PCT2),
+                 ("multiple_step", "Exit multiple step", sens.dcf_multiple_wacc, 0, MULT)]
+        self._section_row(ws, 4, "Grid steps (inputs)", 8)
+        step_cell: dict[str, str] = {}
+        for i, (key, label, table, axis, fmt) in enumerate(steps):
+            values = table.rows if axis == 0 else table.cols
+            ws[f"B{5 + i}"] = label
+            ws[f"D{5 + i}"] = values[1] - values[0]
+            ws[f"D{5 + i}"].number_format = fmt
+            ws[f"D{5 + i}"].font = Font(name=FONT_NAME, color="0000FF")
+            ws[f"D{5 + i}"].fill = PatternFill("solid", fgColor=INPUT_FILL)
+            step_cell[key] = f"$D${5 + i}"
+
+        def centred(centre: str, step: str) -> Callable[[int, float], str]:
+            return lambda k, _v: f"={centre}+({k})*{step}"
+
+        wacc_c = x("DCF", "wacc", "D")
+        g_c = x("Inputs", "terminal_growth_rate", "D")
+        m_c = x("Inputs", "dcf_exit_multiple", "D")
+        pv = lambda w: f"SUMPRODUCT({fcf},(1+{w})^(-{per}))"  # noqa: E731
+
+        top = self._render_grid(
+            ws, 9, sens.dcf_wacc_growth,
+            row_axis=centred(wacc_c, step_cell["wacc_step"]),
+            col_axis=centred(g_c, step_cell["growth_step"]),
+            cell=lambda w, g: (f"=({pv(w)}+{fcf_last}*(1+{g})/({w}-{g})/(1+{w})^{n_last}"
+                               f"+{bridge})/{shares}"),
+            note="Live formulas: each cell reprices the full DCF from the FCF row on the DCF sheet.")
+        top = self._render_grid(
+            ws, top, sens.dcf_multiple_wacc,
+            row_axis=centred(m_c, step_cell["multiple_step"]),
+            col_axis=centred(wacc_c, step_cell["wacc_step"]),
+            cell=lambda m, w: f"=({pv(w)}+{ebitda_last}*{m}/(1+{w})^{n_last}+{bridge})/{shares}",
+            note="Live formulas: terminal value = final-year EBITDA x exit multiple.")
+        lbo_note = ("Engine values: each cell re-runs the full debt waterfall (path-dependent, "
+                    "so not expressible as a single-cell formula).")
+        top = self._render_grid(ws, top, sens.lbo_irr, row_axis=lambda _k, v: v,
+                                col_axis=lambda _k, v: v, cell=None, note=lbo_note)
+        self._render_grid(ws, top, sens.lbo_moic, row_axis=lambda _k, v: v,
+                          col_axis=lambda _k, v: v, cell=None, note=lbo_note)
+        ws.freeze_panes = "C4"
+
+    def _render_scenarios(self, ws: Worksheet) -> None:
+        """Scenario assumptions, outputs, variance vs. base, and the recommendation."""
+        assert self.analysis is not None
+        an = self.analysis
+        names = [r.name for r in an.scenarios]
+        var_cols = [c for c in an.variance.columns if c not in names]
+        cols = names + var_cols
+        self._sheet_frame(ws, f"{self.schema.metadata.name}: Scenario Analysis",
+                          "Engine values: each scenario re-runs the full projection, DCF and "
+                          "LBO with the overrides in config/scenarios.json.",
+                          {"A": 2, "B": 42, **{col_letter(i): 15 for i in range(3, 3 + len(cols))}})
+        last_col = 2 + len(cols)
+
+        def header(row: int) -> None:
+            for j, name in enumerate(cols):
+                cell = ws.cell(row=row, column=3 + j, value=name)
+                cell.font = Font(name=FONT_NAME, bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor=NAVY if j < len(names) else BLUE_HDR)
+                cell.alignment = Alignment(horizontal="right")
+
+        def write(row: int, label: str, values: list[Any], fmt: str, bold: bool = False) -> None:
+            ws.cell(row=row, column=2, value=label).font = Font(name=FONT_NAME, bold=bold)
+            for j, v in enumerate(values):
+                cell = ws.cell(row=row, column=3 + j, value=v)
+                cell.number_format = fmt
+                cell.font = Font(name=FONT_NAME, bold=bold, color="404040")
+
+        row = 4
+        self._section_row(ws, row, "Key assumptions", last_col)
+        header(row + 1)
+        row += 2
+        assumption_rows = [
+            ("Average revenue growth", PCT,
+             lambda m: sum(m.assumptions.operating.revenue_growth) / len(m.assumptions.operating.revenue_growth)),
+            ("Average gross margin", PCT,
+             lambda m: sum(m.assumptions.operating.gross_margin) / len(m.assumptions.operating.gross_margin)),
+            ("LBO exit EV / EBITDA", MULT, lambda m: m.assumptions.transaction.exit_ev_ebitda_multiple),
+            ("DCF terminal EV / EBITDA", MULT, lambda m: m.assumptions.market.exit_ev_ebitda_multiple),
+            ("Offshore cash repatriated at close", PCT,
+             lambda m: m.assumptions.transaction.foreign_cash_usable_pct),
+            ("Repatriation tax rate", PCT, lambda m: m.lbo.entry["repatriation_tax_paid"]
+             / m.lbo.entry["repatriated_cash"] if m.lbo.entry["repatriated_cash"] else
+             (m.assumptions.market.repatriation_tax_rate
+              if m.assumptions.market.repatriation_tax_rate is not None
+              else m.schema.implied_repatriation_tax_rate or 0.0)),
+        ]
+        for label, fmt, fn in assumption_rows:
+            write(row, label, [fn(r.model) for r in an.scenarios], fmt)
+            row += 1
+
+        row += 1
+        self._section_row(ws, row, "Outputs and variance vs. base", last_col)
+        header(row + 1)
+        row += 2
+        fmts = {"revenue_cagr": PCT, "final_year_ebitda_margin": PCT, "lbo_irr": PCT,
+                "min_leverage_cushion": PCT, "min_coverage_cushion": PCT,
+                "debt_repaid_pct": PCT, "dcf_gordon_price": PRICE, "dcf_exit_price": PRICE,
+                "lbo_moic": '0.00"x"', "peak_leverage": MULT}
+        labels = {"revenue_cagr": "Revenue CAGR", "final_year_revenue": "Final-year revenue",
+                  "final_year_ebitda": "Final-year EBITDA",
+                  "final_year_ebitda_margin": "Final-year EBITDA margin",
+                  "cumulative_ufcf": "Cumulative unlevered FCF",
+                  "dcf_gordon_price": "DCF price: Gordon Growth",
+                  "dcf_exit_price": "DCF price: Exit Multiple",
+                  "lbo_sponsor_equity": "Sponsor equity", "lbo_exit_equity": "Exit equity",
+                  "lbo_moic": "Sponsor MOIC", "lbo_irr": "Sponsor IRR",
+                  "peak_leverage": "Peak Debt / EBITDA",
+                  "min_leverage_cushion": "Min EBITDA cushion: leverage covenant",
+                  "min_coverage_cushion": "Min EBITDA cushion: coverage covenant",
+                  "debt_repaid_pct": "Acquisition debt repaid by exit"}
+        for key in an.variance.index:
+            write(row, labels.get(key, key), [float(an.variance.at[key, c]) for c in cols],
+                  fmts.get(key, NUM), bold=key in ("lbo_irr", "lbo_moic"))
+            row += 1
+
+        row += 1
+        self._section_row(ws, row, f"Recommendation: {an.recommendation.verdict}", last_col)
+        row += 1
+        for desc, ok in an.recommendation.tests:
+            ws.cell(row=row, column=2, value=desc).font = Font(name=FONT_NAME)
+            res = ws.cell(row=row, column=3, value="Met" if ok else "Not met")
+            res.font = Font(name=FONT_NAME, bold=True, color="008000" if ok else "C00000")
+            row += 1
+        ws.freeze_panes = "C4"
+
     def _render_checks(self, ws: Worksheet) -> None:
         """One row per identity check, a pass/fail flag, and a master check cell."""
         ws.sheet_view.showGridLines = True
@@ -1363,6 +1610,9 @@ class WorkbookBuilder:
             ("Sponsor IRR", f"={self.ref('LBO', 'irr', col='D')}", PCT),
             ("Model integrity (all checks)", "=Checks!C4", TEXT),
         ]
+        if self.analysis is not None:
+            rows.append(("Investment committee recommendation",
+                         self.analysis.recommendation.verdict, TEXT))
         for i, (label, value, fmt) in enumerate(rows, start=5):
             ws[f"B{i}"] = label
             ws[f"B{i}"].font = Font(name=FONT_NAME, bold=label.isupper() and bool(label))
@@ -1417,18 +1667,20 @@ class WorkbookReport:
     checks: int
 
 
-def write_workbook(model: ValuationModel, path: str | Path) -> WorkbookReport:
+def write_workbook(model: ValuationModel, path: str | Path,
+                   analysis: AnalysisResult | None = None) -> WorkbookReport:
     """Render the full model to an ``.xlsx`` workbook.
 
     Args:
         model: Output of :func:`src.modeling_engine.build_model`.
         path: Destination file.
+        analysis: Phase 3 output; adds the Sensitivity and Scenarios sheets.
 
     Returns:
         A report including the expected value of every formula cell, used by the
         test-suite to reconcile Excel against the Python engine.
     """
-    builder = WorkbookBuilder(model)
+    builder = WorkbookBuilder(model, analysis)
     wb = builder.build()
     # openpyxl stores formulas without cached results: force Excel to calculate on open.
     wb.calculation.fullCalcOnLoad = True

@@ -833,7 +833,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     from src.excel_export import write_workbook
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    write_workbook(model, args.out)
+    try:
+        write_workbook(model, args.out)
+    except PermissionError:
+        logger.error("Cannot write %s: close it in Excel (or any other program) and rerun.",
+                     args.out)
+        return 1
     print("\n" + summarize(model) + f"\n\nWrote {args.out}")
     return 0
 

@@ -1,0 +1,63 @@
+{
+  "investment_criteria": {
+    "target_irr": 0.20,
+    "minimum_moic": 2.0,
+    "require_base_case_covenant_compliance": true,
+    "sources": {
+      "target_irr": "Typical large-cap buyout hurdle rate.",
+      "minimum_moic": "2.0x over a 5-year hold, consistent with the IRR hurdle.",
+      "require_base_case_covenant_compliance": "No maintenance covenant breach permitted in the base case."
+    }
+  },
+  "scenarios": [
+    {
+      "name": "Base",
+      "description": "Management-style base case: low/mid single-digit growth as the iPhone 6 cycle normalises; offshore cash remains trapped.",
+      "overrides": {}
+    },
+    {
+      "name": "Bull",
+      "description": "Sustained iPhone upgrade demand plus Services growth; a one-time repatriation tax lets the sponsor use offshore cash at close; exit at a re-rated multiple.",
+      "overrides": {
+        "operating": {
+          "revenue_growth": [0.060, 0.070, 0.070, 0.060, 0.050],
+          "gross_margin": 0.405
+        },
+        "market": {
+          "repatriation_tax_rate": 0.14,
+          "sources": {
+            "repatriation_tax_rate": "One-time 14% transition tax on accumulated foreign earnings, as proposed in the US FY2016 budget (approx.). VERIFY."
+          }
+        },
+        "transaction": {
+          "exit_ev_ebitda_multiple": 9.5,
+          "foreign_cash_usable_pct": 1.0
+        }
+      }
+    },
+    {
+      "name": "Bear",
+      "description": "iPhone units peak in FY2015: revenue declines and gross margin compresses on mix and FX; exit multiple de-rates to a hardware-cycle valuation.",
+      "overrides": {
+        "operating": {
+          "revenue_growth": [-0.080, -0.020, 0.000, 0.010, 0.010],
+          "gross_margin": [0.385, 0.380, 0.375, 0.375, 0.375]
+        },
+        "market": {
+          "exit_ev_ebitda_multiple": 8.0
+        },
+        "transaction": {
+          "exit_ev_ebitda_multiple": 6.5
+        }
+      }
+    }
+  ],
+  "sensitivity_grids": {
+    "wacc_step": 0.005,
+    "growth_step": 0.005,
+    "dcf_exit_multiple_step": 1.0,
+    "lbo_entry_multiples": [6.0, 7.0, 8.0, 9.0, 10.0],
+    "lbo_debt_pcts": [0.30, 0.40, 0.50, 0.60, 0.70],
+    "steps_each_side": 2
+  }
+}

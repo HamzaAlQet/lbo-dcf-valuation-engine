@@ -10,6 +10,7 @@ __pycache__/
 outputs/extracted/*.json
 outputs/*.xlsx
 outputs/*.md
+outputs/*.json
 !outputs/.gitkeep
 !outputs/extracted/.gitkeep
 

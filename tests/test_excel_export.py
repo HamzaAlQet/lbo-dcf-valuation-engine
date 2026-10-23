@@ -118,6 +118,37 @@ def test_formulas_use_uppercase_functions(
     assert all(f.isupper() for f in functions), functions
 
 
+@pytest.fixture(scope="module")
+def phase3_workbook(analysis: Any, tmp_path_factory: pytest.TempPathFactory
+                    ) -> tuple[WorkbookReport, Callable[[str], Any]]:
+    report = write_workbook(analysis.base.model,
+                            tmp_path_factory.mktemp("xlsx3") / "model.xlsx", analysis=analysis)
+    return report, evaluate(report.path)
+
+
+def test_sensitivity_formulas_reconcile_to_python(
+        phase3_workbook: tuple[WorkbookReport, Callable[[str], Any]]) -> None:
+    report, value = phase3_workbook
+    sens = {a: e for a, e in report.expected.items() if a.startswith("Sensitivity!")}
+    assert len(sens) >= 60  # two 5x5 DCF grids plus their axes
+    bad = [a for a, e in sens.items()
+           if not math.isclose(float(value(a)), e, rel_tol=1e-9, abs_tol=1e-9)]
+    assert not bad, bad[:10]
+    assert value("Checks!C4") == "OK"
+
+
+def test_phase3_sheets_present(
+        phase3_workbook: tuple[WorkbookReport, Callable[[str], Any]]) -> None:
+    report, _ = phase3_workbook
+    wb = openpyxl.load_workbook(report.path)
+    assert wb.sheetnames[-3:] == ["Sensitivity", "Scenarios", "Checks"]
+    ws = wb["Sensitivity"]
+    assert len(ws.conditional_formatting) == 4  # one heat map per grid
+    live_dcf_cells = [c for row in ws.iter_rows() for c in row
+                      if isinstance(c.value, str) and "SUMPRODUCT" in c.value]
+    assert len(live_dcf_cells) == 50  # every DCF grid cell is a formula
+
+
 def test_colour_convention_and_layout(
         workbook: tuple[WorkbookReport, Callable[[str], Any]]) -> None:
     report, _ = workbook

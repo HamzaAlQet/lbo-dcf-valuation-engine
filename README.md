@@ -2,8 +2,9 @@
 
 An end-to-end Python engine that reads an SEC 10-K, extracts audited financials into
 a validated data model, and drives a linked 3-statement model, a DCF, and an LBO
-returns analysis, exported as a fully formula-driven Excel workbook. An investment
-committee memo follows in Phase 3.
+returns analysis, exported as a fully formula-driven Excel workbook. It then
+stress-tests the deal across scenarios and sensitivity grids and writes an investment
+committee memo, with the narrative drafted by Claude.
 
 **Principle:** a number only enters the model if it ties. Every schema re-derives its
 own subtotals and checks the accounting identities (A = L + E, cash roll-forward,
@@ -16,7 +17,7 @@ NI → retained earnings, debt note → balance sheet) at construction time, for
 |---|---|---|
 | 1 | 10-K ingestion, Pydantic schemas, identity validation | **Done** |
 | 2 | 3-statement projection, DCF (WACC, Gordon + exit multiple), LBO waterfall, Excel export | **Done** |
-| 3 | Sensitivity matrices, Base/Bull/Bear scenarios, Claude-generated IC memo | Next |
+| 3 | Sensitivity matrices, Base/Bull/Bear scenarios, risk metrics, Claude-generated IC memo | **Done** |
 
 ## Sample case: Apple Inc. FY2015 (hypothetical take-private stress test)
 
@@ -50,7 +51,23 @@ repatriating foreign earnings implies a **32.8% repatriation tax** ($30.0B / $91
 
 The term loan is swept down from $231B to $8B by FY2020, but returns are capped by the
 size of the equity cheque and by the offshore cash, which cannot fund the deal without
-the repatriation tax. Phase 3 will stress these drivers.
+the repatriation tax.
+
+### Stress test and recommendation: **PASS**
+
+| Scenario | Key changes | IRR | MOIC | DCF (Gordon / Exit) |
+|---|---|---:|---:|---:|
+| Base | As above | 7.5% | 1.43x | $206.92 / $171.57 |
+| Bull | 6–7% growth, offshore cash repatriated at 14%, 9.5x exit | 21.3% | 2.62x | $248.77 / $204.89 |
+| Bear | iPhone peak: −8% revenue in FY2016, margin compression, 6.5x exit | −5.8% | 0.74x | $154.65 / $114.06 |
+
+- **Break-evens (base case, 20% hurdle):** exit at 14.1x EBITDA, or entry at or below 4.4x.
+- **Negative leverage:** at entry multiples of 9.0x and above, more debt *lowers* the
+  IRR, because the cost of acquisition debt exceeds the unlevered return on the price paid.
+- **Covenants are not the constraint:** the minimum EBITDA cushion is 26% in the base
+  case and remains positive in the bear case. Returns are what fail.
+- **The verdict is rule-based:** PASS because base-case IRR (7.5% vs 20%) and MOIC
+  (1.43x vs 2.0x) miss the criteria in `config/scenarios.json`.
 
 ## Quick start
 
@@ -60,12 +77,19 @@ python -m venv .venv
 pip install -e ".[dev]"
 
 python -m src.extractor data/raw/apple_10k_fy2015.pdf --ticker AAPL   # -> outputs/extracted/*.json
-python -m src.modeling_engine outputs/extracted/apple_inc_fy2015.json  # -> outputs/model.xlsx
+python -m src.analyzer outputs/extracted/apple_inc_fy2015.json        # -> model.xlsx, memo.md, analysis.json
 pytest
 ```
 
-Both commands exit with code 1 and print every failed identity if anything does not tie.
-`modeling_engine` also accepts the PDF directly and runs extraction first.
+`src.analyzer` runs the whole pipeline: projection, DCF, LBO, scenarios, sensitivities
+and the memo. (`src.modeling_engine` alone writes the workbook without the Phase 3
+sheets.) Every command also accepts the PDF directly, and exits with code 1, printing
+every failed identity, if anything does not tie.
+
+**Claude memo narrative.** With `ANTHROPIC_API_KEY` set (`pip install -e ".[memo]"`),
+the analyzer drafts the memo with Claude (`claude-opus-5-5`). Without credentials, or
+with `--offline`, it writes the same memo from a deterministic template and says so in
+the memo header.
 
 ## The Excel model (`outputs/model.xlsx`)
 
@@ -77,22 +101,50 @@ Both commands exit with code 1 and print every failed identity if anything does 
 | Debt | 28 existing tranches, reconciled to the balance sheet; blended cost of debt by `SUMPRODUCT` |
 | DCF | WACC build, unlevered FCF, mid-year discounting, both terminal methods, equity bridge |
 | LBO | Cash at close, Sources & Uses, interest, cash sweep by tranche, covenants, MOIC / IRR |
+| Sensitivity | Heat-mapped grids: DCF price for WACC × growth and exit multiple × WACC (**live formulas**), LBO IRR and MOIC for entry multiple × leverage (engine values) |
+| Scenarios | Base / Bull / Bear assumptions, outputs and variance vs. base; recommendation tests |
 | Checks | Every balance and cash tie for every year, plus a master check |
 
 - **No hard-coded calculations.** Hard-coded numbers appear only for reported 10-K data
   and on the Inputs sheet. Every subtotal, projection and return is a formula
   (`=SUM`, `=MIN`, `=MAX`, `=IF`, `=SUMPRODUCT`, `=IRR`), and a test enforces this.
 - **Excel = Python, proven.** The tests recalculate the workbook with the `formulas`
-  engine and reconcile all ~750 formula cells against the Python engine to 1e-9
-  relative tolerance. A negative-control test adds $1 to one balance-sheet cell and
+  engine and reconcile all ~820 formula cells, including the live DCF sensitivity
+  grids, against the Python engine to 1e-9 relative tolerance. A negative-control test adds $1 to one balance-sheet cell and
   checks that the master check flips to `ERROR`.
 - **Colour convention:** blue = input / reported, black = formula, green = link to
   another sheet. Gridlines are on and panes are frozen.
+
+## The IC memo (`outputs/memo.md`)
+
+The memo has seven sections: executive summary and thesis, transaction overview (S&U),
+valuation and returns (Base / Bull / Bear), key risks, downside sensitivities, covenant
+headroom, and the final recommendation, followed by an assumptions appendix.
+
+**Numbers come from the engine, prose from Claude.** The memo is built in a two-step
+prompt chain on `claude-opus-5-5`:
+
+1. **Risk assessment.** The full deal data pack (`analysis.json`) goes in; a
+   Pydantic-validated `RiskAssessment` comes back via structured outputs.
+2. **Narrative.** Claude writes the prose around `{{TABLE_...}}` placeholders, and
+   Python substitutes tables rendered directly from the model, so no table figure can
+   be mis-transcribed.
+
+**Guardrails:**
+- **The verdict is fixed.** Proceed / Pass is decided by explicit investment
+  criteria. The memo is rejected if Claude contradicts it, drops a section, or
+  misplaces a table.
+- **The data pack is cached.** It sits in a prompt-cached system prefix shared by both
+  calls.
+- **Refusals are handled.** Server-side refusal fallbacks are enabled
+  (`fallbacks: "default"`), and a refusal or truncation raises rather than producing a
+  partial memo.
 
 ## Project layout
 
 ```
 config/assumptions.json   Market, operating and transaction assumptions, each with a source
+config/scenarios.json     Bull / Bear overrides, investment criteria, sensitivity grid axes
 data/raw/                 Source filings
 src/exceptions.py         Error hierarchy (AccountingIdentityError, AssumptionError, ...)
 src/schemas.py            Pydantic models: statements, debt, assumptions, identity checks
@@ -100,9 +152,10 @@ src/metrics.py            Pure formulas (UFCF, NOPAT, EBITDA, NPV, IRR): unit-te
 src/extractor.py          10-K -> FinancialStatementSchema pipeline and CLI
 src/modeling_engine.py    3-statement projection, DCF, LBO, and CLI
 src/excel_export.py       Formula-driven openpyxl workbook
-src/analyzer.py           Phase 3
-tests/                    103 pytest tests (see below)
-outputs/                  Generated JSON, model.xlsx, memo.md
+src/analyzer.py           Scenarios, sensitivity grids, risk metrics, recommendation, CLI
+src/memo_generator.py     Claude prompt chain, memo validation, template fallback
+tests/                    133 pytest tests (Claude calls tested with a fake client)
+outputs/                  Generated JSON, model.xlsx, memo.md, analysis.json
 ```
 
 ## What gets validated
