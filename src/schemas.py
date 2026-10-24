@@ -137,12 +137,16 @@ class IncomeStatement(StrictModel):
     gross_margin: Money
     research_and_development: NonNegMoney = 0.0
     selling_general_administrative: NonNegMoney
-    total_operating_expenses: NonNegMoney
+    other_operating_expenses: Money = Field(
+        default=0.0, description="Amortization, restructuring and other operating items")
+    total_operating_expenses: Money
     operating_income: Money = Field(description="EBIT: excludes other income/expense")
     other_income_expense: Money = 0.0
     pretax_income: Money
     income_tax_expense: Money
-    net_income: Money
+    other_net_income_items: Money = Field(
+        default=0.0, description="Equity-method income, minority interest, discontinued ops")
+    net_income: Money = Field(description="Attributable to the parent's shareholders")
     basic_shares: NonNegMoney | None = Field(default=None, description="Millions")
     diluted_shares: float = Field(gt=0, description="Weighted-average diluted, millions")
     eps_basic: Money | None = None
@@ -152,6 +156,7 @@ class IncomeStatement(StrictModel):
     OPEX: ClassVar[tuple[str, ...]] = (
         "research_and_development",
         "selling_general_administrative",
+        "other_operating_expenses",
     )
 
     @model_validator(mode="after")
@@ -163,23 +168,26 @@ class IncomeStatement(StrictModel):
             [
                 ("Gross margin = Net sales - COGS",
                  self.gross_margin, self.net_sales - self.cost_of_sales),
-                ("Total opex = R&D + SG&A",
+                ("Total opex = R&D + SG&A + Other opex",
                  self.total_operating_expenses, self._sum(self.OPEX)),
                 ("Operating income = Gross margin - Total opex",
                  self.operating_income, self.gross_margin - self.total_operating_expenses),
                 ("Pre-tax income = Operating income + Other income",
                  self.pretax_income, self.operating_income + self.other_income_expense),
-                ("Net income = Pre-tax income - Tax",
-                 self.net_income, self.pretax_income - self.income_tax_expense),
+                ("Net income = Pre-tax income - Tax + Other items",
+                 self.net_income,
+                 self.pretax_income - self.income_tax_expense + self.other_net_income_items),
             ],
             tol,
         )
         if self.eps_diluted is not None:
+            # Two-class and preferred-dividend adjustments can move reported EPS slightly,
+            # so allow 2% (or one cent, whichever is larger).
             enforce_identities(
                 f"Income Statement FY{self.fiscal_year}",
                 [("Diluted EPS = Net income / Diluted shares",
                   self.eps_diluted, self.net_income / self.diluted_shares)],
-                EPS_TOLERANCE,
+                max(EPS_TOLERANCE, 0.02 * abs(self.eps_diluted)),
             )
         return self
 
@@ -208,7 +216,13 @@ class IncomeStatement(StrictModel):
 # Balance sheet
 # --------------------------------------------------------------------------------------
 class BalanceSheet(StrictModel):
-    """Consolidated balance sheet at one fiscal year end."""
+    """Consolidated balance sheet at one fiscal year end.
+
+    The four "other" lines (other current / non-current assets, accrued and other
+    current liabilities, other non-current liabilities) may hold the remainder of a
+    reported subtotal for filings that do not break it down further, so they accept
+    any sign; the XBRL mapper flags a negative remainder in the derivation notes.
+    """
 
     fiscal_year: FiscalYear
 
@@ -219,7 +233,7 @@ class BalanceSheet(StrictModel):
     inventories: NonNegMoney = 0.0
     deferred_tax_assets_current: NonNegMoney = 0.0
     vendor_non_trade_receivables: NonNegMoney = 0.0
-    other_current_assets: NonNegMoney = 0.0
+    other_current_assets: Money = 0.0
     total_current_assets: NonNegMoney
 
     # Non-current assets
@@ -227,28 +241,31 @@ class BalanceSheet(StrictModel):
     ppe_net: NonNegMoney = 0.0
     goodwill: NonNegMoney = 0.0
     intangible_assets: NonNegMoney = 0.0
-    other_non_current_assets: NonNegMoney = 0.0
+    other_non_current_assets: Money = 0.0
     total_assets: NonNegMoney
 
     # Current liabilities
     accounts_payable: NonNegMoney = 0.0
-    accrued_expenses: NonNegMoney = 0.0
+    accrued_expenses: Money = 0.0
     deferred_revenue_current: NonNegMoney = 0.0
     commercial_paper: NonNegMoney = 0.0
+    short_term_debt: NonNegMoney = Field(default=0.0, description="Short-term borrowings")
     current_portion_long_term_debt: NonNegMoney = 0.0
     total_current_liabilities: NonNegMoney
 
     # Non-current liabilities
     deferred_revenue_non_current: NonNegMoney = 0.0
     long_term_debt: NonNegMoney = 0.0
-    other_non_current_liabilities: NonNegMoney = 0.0
+    other_non_current_liabilities: Money = 0.0
     total_liabilities: NonNegMoney
 
     # Shareholders' equity
     common_stock_and_apic: Money = 0.0
     retained_earnings: Money = 0.0
     accumulated_other_comprehensive_income: Money = 0.0
-    total_equity: Money
+    other_equity: Money = Field(default=0.0, description="Treasury stock and other items")
+    noncontrolling_interest: Money = 0.0
+    total_equity: Money = Field(description="Including noncontrolling interest")
     total_liabilities_and_equity: NonNegMoney
 
     CURRENT_ASSETS: ClassVar[tuple[str, ...]] = (
@@ -262,14 +279,14 @@ class BalanceSheet(StrictModel):
     )
     CURRENT_LIABILITIES: ClassVar[tuple[str, ...]] = (
         "accounts_payable", "accrued_expenses", "deferred_revenue_current",
-        "commercial_paper", "current_portion_long_term_debt",
+        "commercial_paper", "short_term_debt", "current_portion_long_term_debt",
     )
     NON_CURRENT_LIABILITIES: ClassVar[tuple[str, ...]] = (
         "deferred_revenue_non_current", "long_term_debt", "other_non_current_liabilities",
     )
     EQUITY: ClassVar[tuple[str, ...]] = (
         "common_stock_and_apic", "retained_earnings",
-        "accumulated_other_comprehensive_income",
+        "accumulated_other_comprehensive_income", "other_equity", "noncontrolling_interest",
     )
 
     @model_validator(mode="after")
@@ -288,7 +305,7 @@ class BalanceSheet(StrictModel):
                 ("Total liabilities = Current + Non-current liabilities",
                  self.total_liabilities,
                  self.total_current_liabilities + self._sum(self.NON_CURRENT_LIABILITIES)),
-                ("Total equity = APIC + Retained earnings + AOCI",
+                ("Total equity = sum of equity components",
                  self.total_equity, self._sum(self.EQUITY)),
                 ("Total L&E = Total liabilities + Total equity",
                  self.total_liabilities_and_equity, self.total_liabilities + self.total_equity),
@@ -301,8 +318,10 @@ class BalanceSheet(StrictModel):
 
     @property
     def total_debt(self) -> float:
-        """Commercial paper + current and long-term funded debt (carrying value)."""
-        return self.commercial_paper + self.current_portion_long_term_debt + self.long_term_debt
+        """Commercial paper, short-term borrowings, and current and long-term funded debt
+        (carrying value)."""
+        return (self.commercial_paper + self.short_term_debt
+                + self.current_portion_long_term_debt + self.long_term_debt)
 
     @property
     def cash_and_investments(self) -> float:
@@ -327,6 +346,7 @@ class BalanceSheet(StrictModel):
         operating_liabilities = (
             self.total_current_liabilities
             - self.commercial_paper
+            - self.short_term_debt
             - self.current_portion_long_term_debt
         )
         return operating_assets - operating_liabilities
@@ -381,8 +401,14 @@ class CashFlowStatement(StrictModel):
     other_financing: Money = 0.0
     cash_from_financing: Money
 
+    fx_and_other_cash_effects: Money = Field(
+        default=0.0, description="Exchange-rate effect on cash and other reconciling items")
     net_change_in_cash: Money
     ending_cash: NonNegMoney
+
+    # Cash on the CFS may include restricted cash that the balance sheet carries elsewhere
+    restricted_cash_beginning: NonNegMoney = 0.0
+    restricted_cash_ending: NonNegMoney = 0.0
 
     # Supplemental
     cash_taxes_paid: NonNegMoney | None = None
@@ -421,9 +447,10 @@ class CashFlowStatement(StrictModel):
                  self.cash_from_investing, self._sum(self.INVESTING)),
                 ("CFF = sum of financing items",
                  self.cash_from_financing, self._sum(self.FINANCING)),
-                ("Net change in cash = CFO + CFI + CFF",
+                ("Net change in cash = CFO + CFI + CFF + FX & other",
                  self.net_change_in_cash,
-                 self.cash_from_operations + self.cash_from_investing + self.cash_from_financing),
+                 self.cash_from_operations + self.cash_from_investing + self.cash_from_financing
+                 + self.fx_and_other_cash_effects),
                 ("Ending cash = Beginning cash + Net change",
                  self.ending_cash, self.beginning_cash + self.net_change_in_cash),
             ],
@@ -715,6 +742,8 @@ class OperatingAssumptions(StrictModel):
     gross_margin: list[Annotated[float, Field(gt=0.0, lt=1.0)]]
     rd_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
     sga_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
+    other_opex_pct_sales: list[Annotated[float, Field(ge=-0.5, lt=1.0)]] = Field(
+        default_factory=list, description="Other operating expenses; defaults to 0")
     da_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
     capex_pct_sales: list[Annotated[float, Field(ge=0.0, lt=1.0)]]
     tax_rate: list[Annotated[float, Field(ge=0.0, le=0.60)]]
@@ -735,7 +764,7 @@ class OperatingAssumptions(StrictModel):
 
     PER_YEAR: ClassVar[tuple[str, ...]] = (
         "revenue_growth", "gross_margin", "rd_pct_sales", "sga_pct_sales",
-        "da_pct_sales", "capex_pct_sales", "tax_rate",
+        "other_opex_pct_sales", "da_pct_sales", "capex_pct_sales", "tax_rate",
     )
 
     @model_validator(mode="before")
@@ -745,6 +774,8 @@ class OperatingAssumptions(StrictModel):
         if isinstance(data, dict):
             n = int(data.get("projection_years", 5))
             data = dict(data)
+            if not data.get("other_opex_pct_sales"):
+                data["other_opex_pct_sales"] = 0.0
             for name in cls.PER_YEAR:
                 if name in data:
                     data[name] = _broadcast(data[name], n, name)
@@ -752,13 +783,15 @@ class OperatingAssumptions(StrictModel):
 
     @model_validator(mode="after")
     def _check_margin_stack(self) -> OperatingAssumptions:
-        """Gross margin must cover R&D and SG&A, or EBIT turns negative by construction."""
-        for i, (gm, rd, sga) in enumerate(
-            zip(self.gross_margin, self.rd_pct_sales, self.sga_pct_sales, strict=True)
-        ):
-            if rd + sga >= gm:
+        """Gross margin must cover operating expenses, or EBIT turns negative by
+        construction (and an LBO of a loss-making company has no debt capacity)."""
+        for i, (gm, rd, sga, other) in enumerate(zip(
+                self.gross_margin, self.rd_pct_sales, self.sga_pct_sales,
+                self.other_opex_pct_sales, strict=True)):
+            if rd + sga + other >= gm:
                 raise ValueError(
-                    f"Year {i + 1}: R&D ({rd:.1%}) + SG&A ({sga:.1%}) >= gross margin ({gm:.1%})"
+                    f"Year {i + 1}: R&D ({rd:.1%}) + SG&A ({sga:.1%}) + other opex "
+                    f"({other:.1%}) >= gross margin ({gm:.1%})"
                 )
         return self
 
@@ -876,6 +909,13 @@ class FinancialStatementSchema(StrictModel):
         default=None, description="Unrecognized deferred tax liability on foreign earnings"
     )
     investment_portfolio_yield: Rate | None = None
+    reported_interest_expense: dict[FiscalYear, NonNegMoney] = Field(
+        default_factory=dict, description="Used to imply a cost of debt without a debt note")
+
+    # Provenance
+    data_source: Literal["pdf", "xbrl"] = "pdf"
+    derivation_notes: list[str] = Field(
+        default_factory=list, description="Lines derived rather than reported, and why")
 
     @model_validator(mode="after")
     def _check_structure(self) -> FinancialStatementSchema:
@@ -911,11 +951,13 @@ class FinancialStatementSchema(StrictModel):
             if y in inc:
                 checks.append((f"FY{y} Net income: IS = CFS", inc[y].net_income, cf.net_income))
             if y in bal:
-                checks.append((f"FY{y} Cash: CFS ending = BS",
-                               cf.ending_cash, bal[y].cash_and_equivalents))
+                checks.append((f"FY{y} Cash: CFS ending (ex. restricted) = BS",
+                               cf.ending_cash - cf.restricted_cash_ending,
+                               bal[y].cash_and_equivalents))
             if y - 1 in bal:
-                checks.append((f"FY{y} Cash: CFS beginning = prior-year BS",
-                               cf.beginning_cash, bal[y - 1].cash_and_equivalents))
+                checks.append((f"FY{y} Cash: CFS beginning (ex. restricted) = prior-year BS",
+                               cf.beginning_cash - cf.restricted_cash_beginning,
+                               bal[y - 1].cash_and_equivalents))
 
         for rf in self.equity_roll_forwards:
             y = rf.fiscal_year

@@ -111,6 +111,46 @@ def test_flexing_assumptions_recomputes(app: AppTest) -> None:
     assert any("Template memo for these assumptions" in c.value for c in app.caption)
 
 
+def test_ticker_mode_values_another_company(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json as _json
+
+    from src import xbrl_mapping
+    from src.xbrl import company_facts_to_filing
+
+    fixture = Path(__file__).parent / "fixtures" / "companyfacts_HD.json"
+    hd = xbrl_mapping.build_schema(company_facts_to_filing(
+        _json.loads(fixture.read_text(encoding="utf-8")), ticker="HD"))
+    calls: list[tuple[str, int | None]] = []
+
+    def fake_lookup(ticker: str, fiscal_year: int | None = None) -> Any:
+        calls.append((ticker, fiscal_year))
+        return hd
+
+    monkeypatch.setattr(xbrl_mapping, "schema_from_ticker", fake_lookup)
+    at = AppTest.from_file(APP, default_timeout=300)
+    at.run()
+    at.radio(key="mode").set_value("Look up a ticker").run()
+    assert not at.exception, at.exception
+    at.text_input(key="ticker_input").input("hd")
+    at.number_input(key="price_ticker").set_value(380.0)
+    at.button[0].click().run()  # the form's submit button
+    assert not at.exception, at.exception
+    assert calls == [("HD", None)]
+    assert "HOME DEPOT" in at.title[0].value.upper()
+    labels = {m.label for m in at.metric}
+    assert {"Sponsor IRR", "LBO offer price"} <= labels
+    offer = next(m for m in at.metric if m.label == "LBO offer price")
+    assert "+30.0% vs $380.00" in offer.delta
+
+
+def test_upload_mode_values_an_inline_xbrl_10k() -> None:
+    at = AppTest.from_file(APP, default_timeout=300)
+    at.run()
+    at.radio(key="mode").set_value("Upload a 10-K (.htm)").run()
+    assert not at.exception, at.exception
+    assert any("Enter a ticker or upload" in i.value for i in at.info)  # waits for input
+
+
 def test_claude_memo_uses_visitor_key_not_server_key(app: AppTest,
                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "server-key-must-not-be-used")

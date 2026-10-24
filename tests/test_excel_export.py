@@ -75,12 +75,13 @@ def test_master_check_passes(workbook: tuple[WorkbookReport, Callable[[str], Any
 
 def test_broken_formula_trips_master_check(
         workbook: tuple[WorkbookReport, Callable[[str], Any]], tmp_path: Path) -> None:
-    """Negative control: add $1 to one projected total assets cell."""
+    """Negative control: add $10M (well beyond the $1M rounding tolerance) to one
+    projected total assets cell."""
     report, _ = workbook
     wb = openpyxl.load_workbook(report.path)
     ws = wb["BS"]
     row = next(c.row for c in ws["B"] if c.value == "Total assets")
-    ws[f"H{row}"].value += "+1"
+    ws[f"H{row}"].value += "+10"
     broken = tmp_path / "broken.xlsx"
     wb.save(broken)
     assert evaluate(broken)("Checks!C4") == "ERROR"

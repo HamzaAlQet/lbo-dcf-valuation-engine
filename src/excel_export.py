@@ -42,9 +42,16 @@ from openpyxl.worksheet.worksheet import Worksheet
 from src.modeling_engine import (
     HELD_FLAT_BALANCES,
     WORKING_CAPITAL_DRIVERS,
+    MAX_IMPLIED_COST_OF_DEBT,
     ValuationModel,
     blended_cost_of_debt,
+    implied_cost_of_debt,
 )
+
+from src.schemas import DEFAULT_TOLERANCE
+
+CHECK_THRESHOLD = DEFAULT_TOLERANCE + 1e-6
+"""Checks-sheet threshold: the same $1M rounding tolerance the schemas apply."""
 
 if TYPE_CHECKING:  # analyzer imports nothing from here; the guard keeps imports one-way
     from src.analyzer import AnalysisResult, SensitivityTable
@@ -204,6 +211,7 @@ class WorkbookBuilder:
         self.sheets: dict[str, SheetSpec] = {}
         self.checks: list[tuple[str, str, str]] = []  # (description, sheet, cell)
         self.expected: dict[str, float] = {}
+        self.tolerances: dict[str, float] = {}  # absolute tolerance where not exact
 
     # ---------------------------------------------------------------- helpers
     def col(self, year: int) -> str:
@@ -274,17 +282,23 @@ class WorkbookBuilder:
                value=lambda: int(m.deduct_repatriation_tax_in_equity_bridge), fmt=INT)
         s.line("repatriation_tax_rate", "Repatriation tax rate",
                value=lambda: (m.repatriation_tax_rate if m.repatriation_tax_rate is not None
-                              else f"={s.r('unrecognized_repatriation_tax', col='D')}"
-                                   f"/{s.r('undistributed_foreign_earnings', col='D')}"),
+                              else f"=IF({s.r('undistributed_foreign_earnings', col='D')}=0,0,"
+                                   f"{s.r('unrecognized_repatriation_tax', col='D')}"
+                                   f"/{s.r('undistributed_foreign_earnings', col='D')})"),
                fmt=PCT, expect=lambda _: sch.implied_repatriation_tax_rate
                if m.repatriation_tax_rate is None else None)
         s.line("days_in_year", "Days in year", value=lambda: 365, fmt=INT)
 
         s.section("Filing disclosures (10-K, latest fiscal year end)")
+        # Same fallback as FinancialStatementSchema.diluted_shares_outstanding: without
+        # both period-end and basic shares, use weighted diluted shares throughout.
+        both_known = sch.shares_outstanding is not None and inc.basic_shares is not None
         s.line("shares_outstanding", "Shares outstanding at year end",
-               value=lambda: sch.shares_outstanding or inc.diluted_shares, fmt=NUM1, unit="m")
+               value=lambda: sch.shares_outstanding if both_known else inc.diluted_shares,
+               fmt=NUM1, unit="m")
         s.line("basic_shares_weighted", "Weighted-average basic shares",
-               value=lambda: inc.basic_shares or inc.diluted_shares, fmt=NUM1, unit="m")
+               value=lambda: inc.basic_shares if both_known else inc.diluted_shares,
+               fmt=NUM1, unit="m")
         s.line("diluted_shares_weighted", "Weighted-average diluted shares",
                value=lambda: inc.diluted_shares, fmt=NUM1, unit="m")
         s.line("diluted_shares_outstanding", "Diluted shares (period-end + dilution)",
@@ -324,6 +338,9 @@ class WorkbookBuilder:
         s.line("sga_pct_sales", "SG&A, % of sales", fmt=PCT,
                hist=ratio("selling_general_administrative", "net_sales"),
                proj=driver("sga_pct_sales"))
+        s.line("other_opex_pct_sales", "Other operating expenses, % of sales", fmt=PCT,
+               hist=ratio("other_operating_expenses", "net_sales"),
+               proj=driver("other_opex_pct_sales"))
         s.line("da_pct_sales", "D&A, % of sales", fmt=PCT,
                hist=ratio("depreciation_and_amortization", "net_sales"),
                proj=driver("da_pct_sales"))
@@ -431,8 +448,12 @@ class WorkbookBuilder:
                hist=reported("selling_general_administrative"),
                proj=lambda y: f"={s.r('net_sales', y)}*{inp('sga_pct_sales', y)}",
                expect=source("selling_general_administrative"))
+        s.line("other_operating_expenses", "Other operating expenses",
+               hist=reported("other_operating_expenses"),
+               proj=lambda y: f"={s.r('net_sales', y)}*{inp('other_opex_pct_sales', y)}",
+               expect=source("other_operating_expenses"))
         s.line("total_operating_expenses", "Total operating expenses", style="subtotal",
-               **both(lambda y: f"=SUM({s.span('research_and_development', 'selling_general_administrative', y)})"),
+               **both(lambda y: f"=SUM({s.span('research_and_development', 'other_operating_expenses', y)})"),
                expect=source("total_operating_expenses"))
         s.line("operating_income", "Operating income (EBIT)", style="subtotal",
                **both(lambda y: f"={s.r('gross_margin', y)}-{s.r('total_operating_expenses', y)}"),
@@ -458,8 +479,10 @@ class WorkbookBuilder:
                               f"+{opening('short_term_investments', y)}"
                               f"+{opening('long_term_investments', y)})",
                expect=source("interest_income"))
-        s.line("interest_expense", "Interest expense",
+        s.line("interest_expense", "Interest expense (historical: as reported, memo)",
+               hist=lambda y: sch.reported_interest_expense.get(y),
                proj=lambda y: f"={inp('cost_of_debt', y)}*({opening('commercial_paper', y)}"
+                              f"+{opening('short_term_debt', y)}"
                               f"+{opening('current_portion_long_term_debt', y)}"
                               f"+{opening('long_term_debt', y)})",
                expect=source("interest_expense"))
@@ -474,8 +497,11 @@ class WorkbookBuilder:
                hist=reported("income_tax_expense"),
                proj=lambda y: f"={s.r('pretax_income', y)}*{inp('tax_rate', y)}",
                expect=source("income_tax_expense"))
-        s.line("net_income", "Net income", style="total",
-               **both(lambda y: f"={s.r('pretax_income', y)}-{s.r('income_tax_expense', y)}"),
+        s.line("other_net_income_items", "Equity income, minority interest & other",
+               hist=reported("other_net_income_items"))
+        s.line("net_income", "Net income attributable to shareholders", style="total",
+               **both(lambda y: f"={s.r('pretax_income', y)}-{s.r('income_tax_expense', y)}"
+                                f"+{s.r('other_net_income_items', y)}"),
                expect=source("net_income"))
         s.blank()
         s.line("diluted_shares", "Diluted shares", fmt=NUM1, unit="m",
@@ -555,21 +581,31 @@ class WorkbookBuilder:
         item("total_current_assets", "Total current assets", style="subtotal",
              **both(lambda y: f"=SUM({s.span('cash_and_equivalents', 'other_current_assets', y)})"))
         item("long_term_investments", "Long-term marketable securities")
+        # Capex adds to PP&E; D&A reduces it, and D&A beyond the available PP&E runs off
+        # intangibles, then other assets (mirrors modeling_engine.depreciate_fixed_assets).
+        excess = lambda y: (f"MAX({is_('depreciation_and_amortization', y)}"  # noqa: E731
+                            f"+{cfs('capital_expenditures', y)}-{s.r('ppe_net', y - 1)},0)")
         item("ppe_net", "Property, plant and equipment, net",
-             proj=lambda y: f"={s.r('ppe_net', y - 1)}-{cfs('capital_expenditures', y)}"
-                            f"-{is_('depreciation_and_amortization', y)}")
+             proj=lambda y: f"=MAX({s.r('ppe_net', y - 1)}-{cfs('capital_expenditures', y)}"
+                            f"-{is_('depreciation_and_amortization', y)},0)")
         item("goodwill", "Goodwill")
-        item("intangible_assets", "Acquired intangible assets, net")
-        item("other_non_current_assets", "Other assets")
+        item("intangible_assets", "Acquired intangible assets, net",
+             proj=lambda y: f"={s.r('intangible_assets', y - 1)}"
+                            f"-MIN({excess(y)},{s.r('intangible_assets', y - 1)})")
+        item("other_non_current_assets", "Other assets",
+             proj=lambda y: f"={s.r('other_non_current_assets', y - 1)}"
+                            f"-MAX({excess(y)}-{s.r('intangible_assets', y - 1)},0)")
         item("total_assets", "Total assets", style="total",
              **both(lambda y: f"={s.r('total_current_assets', y)}"
                               f"+SUM({s.span('long_term_investments', 'other_non_current_assets', y)})"))
 
         s.section("Liabilities")
         item("accounts_payable", "Accounts payable")
-        item("accrued_expenses", "Accrued expenses")
+        item("accrued_expenses", "Accrued and other current liabilities")
         item("deferred_revenue_current", "Deferred revenue")
         item("commercial_paper", "Commercial paper")
+        item("short_term_debt", "Short-term borrowings (incl. revolver draws)",
+             proj=lambda y: f"={s.r('short_term_debt', y - 1)}+{cfs('proceeds_from_debt_net', y)}")
         item("current_portion_long_term_debt", "Current portion of long-term debt")
         item("total_current_liabilities", "Total current liabilities", style="subtotal",
              **both(lambda y: f"=SUM({s.span('accounts_payable', 'current_portion_long_term_debt', y)})"))
@@ -586,8 +622,10 @@ class WorkbookBuilder:
              proj=lambda y: f"={s.r('retained_earnings', y - 1)}+{is_('net_income', y)}"
                             f"+{cfs('dividends_paid', y)}+{cfs('share_repurchases', y)}")
         item("accumulated_other_comprehensive_income", "Accumulated other comprehensive income")
-        item("total_equity", "Total shareholders' equity", style="subtotal",
-             **both(lambda y: f"=SUM({s.span('common_stock_and_apic', 'accumulated_other_comprehensive_income', y)})"))
+        item("other_equity", "Treasury stock and other equity")
+        item("noncontrolling_interest", "Noncontrolling interests")
+        item("total_equity", "Total equity", style="subtotal",
+             **both(lambda y: f"=SUM({s.span('common_stock_and_apic', 'noncontrolling_interest', y)})"))
         item("total_liabilities_and_equity", "Total liabilities and shareholders' equity",
              style="total",
              **both(lambda y: f"={s.r('total_liabilities', y)}+{s.r('total_equity', y)}"))
@@ -599,11 +637,13 @@ class WorkbookBuilder:
                **both(lambda y: f"=({s.r('total_current_assets', y)}-{s.r('cash_and_equivalents', y)}"
                                 f"-{s.r('short_term_investments', y)}-{s.r('deferred_tax_assets_current', y)})"
                                 f"-({s.r('total_current_liabilities', y)}-{s.r('commercial_paper', y)}"
+                                f"-{s.r('short_term_debt', y)}"
                                 f"-{s.r('current_portion_long_term_debt', y)})"),
                expect=lambda y: (self.p.statements[y][1] if y in self.proj_years
                                  else sch.balance_sheet(y)).net_working_capital)  # type: ignore[index,arg-type]
         s.line("total_debt", "Total debt",
-               **both(lambda y: f"={s.r('commercial_paper', y)}+{s.r('current_portion_long_term_debt', y)}"
+               **both(lambda y: f"={s.r('commercial_paper', y)}+{s.r('short_term_debt', y)}"
+                                f"+{s.r('current_portion_long_term_debt', y)}"
                                 f"+{s.r('long_term_debt', y)}"))
         s.line("cash_and_investments", "Cash and marketable securities",
                **both(lambda y: f"={s.r('cash_and_equivalents', y)}+{s.r('short_term_investments', y)}"
@@ -680,11 +720,19 @@ class WorkbookBuilder:
         item("proceeds_from_stock_issuance", "Proceeds from issuance of common stock")
         item("excess_tax_benefits", "Excess tax benefits from equity awards")
         item("taxes_on_net_share_settlement", "Taxes on net share settlement")
+        # Distributions: % of positive earnings, capped at cash available after
+        # operating and investing flows (dividends first, then buybacks).
+        available = lambda y: (f"MAX({s.r('beginning_cash', y)}+{s.r('cash_from_operations', y)}"  # noqa: E731
+                               f"+{s.r('cash_from_investing', y)},0)")
         item("dividends_paid", "Dividends paid",
-             proj=lambda y: f"=-{is_('net_income', y)}*{inp('dividend_payout_ratio', y)}")
+             proj=lambda y: f"=-MIN(MAX({is_('net_income', y)},0)*{inp('dividend_payout_ratio', y)},"
+                            f"{available(y)})")
         item("share_repurchases", "Repurchases of common stock",
-             proj=lambda y: f"=-{is_('net_income', y)}*{inp('buyback_pct_net_income', y)}")
-        item("proceeds_from_debt_net", "Proceeds from issuance of debt, net")
+             proj=lambda y: f"=-MIN(MAX({is_('net_income', y)},0)*{inp('buyback_pct_net_income', y)},"
+                            f"MAX({available(y)}+{s.r('dividends_paid', y)},0))")
+        item("proceeds_from_debt_net", "Proceeds from debt (projection: revolver draw)",
+             proj=lambda y: f"=MAX(-({s.r('beginning_cash', y)}+{s.r('cash_from_operations', y)}"
+                            f"+{s.r('cash_from_investing', y)}),0)")
         item("repayment_of_debt", "Repayment of debt")
         item("change_in_commercial_paper", "Change in commercial paper, net")
         item("other_financing", "Other financing")
@@ -692,15 +740,21 @@ class WorkbookBuilder:
              **both(lambda y: f"=SUM({s.span('proceeds_from_stock_issuance', 'other_financing', y)})"))
 
         s.blank()
+        item("fx_and_other_cash_effects", "Exchange-rate effect and other")
         item("net_change_in_cash", "Net change in cash", style="subtotal",
              **both(lambda y: f"={s.r('cash_from_operations', y)}+{s.r('cash_from_investing', y)}"
-                              f"+{s.r('cash_from_financing', y)}"))
+                              f"+{s.r('cash_from_financing', y)}"
+                              f"+{s.r('fx_and_other_cash_effects', y)}"))
         item("ending_cash", "Cash, end of year", style="total",
              **both(lambda y: f"={s.r('beginning_cash', y)}+{s.r('net_change_in_cash', y)}"))
-        s.line("cash_check", "Check: ending cash - balance sheet cash", style="check",
-               hist=lambda y: (f"={s.r('ending_cash', y)}-{bs('cash_and_equivalents', y)}"
+        item("restricted_cash_ending", "  of which restricted cash (not in balance sheet cash)")
+        s.line("cash_check", "Check: ending cash ex. restricted - balance sheet cash",
+               style="check",
+               hist=lambda y: (f"={s.r('ending_cash', y)}-{s.r('restricted_cash_ending', y)}"
+                               f"-{bs('cash_and_equivalents', y)}"
                                if y in self.bs_years else None),
-               proj=lambda y: f"={s.r('ending_cash', y)}-{bs('cash_and_equivalents', y)}")
+               proj=lambda y: f"={s.r('ending_cash', y)}-{s.r('restricted_cash_ending', y)}"
+                              f"-{bs('cash_and_equivalents', y)}")
         s.line("net_income_check", "Check: CFS net income - IS net income", style="check",
                hist=lambda y: f"={s.r('net_income', y)}-{is_('net_income', y)}")
 
@@ -709,6 +763,9 @@ class WorkbookBuilder:
         s = self.add(SheetSpec(self, "Debt", "Existing Debt Schedule (10-K)",
                                hist_years=[], proj_years=[]))
         ds = self.schema.debt_schedule
+        if ds is None:
+            self._declare_implied_debt_cost(s)
+            return
         s.section("Term debt tranches", columns={
             "C": "Currency", "D": "Principal", "E": "Eff. rate low", "F": "Eff. rate high",
             "G": "Eff. rate mid", "H": "Maturity from", "I": "Maturity to"})
@@ -764,6 +821,39 @@ class WorkbookBuilder:
                               f"/({s.r('total_principal', col='D')}+{s.r('commercial_paper', col='D')})"
                               if rng else 0.0),
                expect=lambda _: blended_cost_of_debt(self.schema, self.a.market))
+
+    def _declare_implied_debt_cost(self, s: SheetSpec) -> None:
+        """Debt sheet for filings without a parsed debt note: the cost of debt is
+        implied from interest expense over average funded debt (capped)."""
+        sch = self.schema
+        y0 = self.base_year
+        has_interest = y0 in sch.reported_interest_expense and y0 - 1 in self.bs_years
+        cur, prior = self.col(y0), self.col(y0 - 1) if y0 - 1 in self.bs_years else None
+        s.section("Cost of debt implied from interest expense (no debt note parsed)")
+        s.line("interest_expense", f"Interest expense FY{y0} (reported)",
+               value=lambda: (f"={s.r('interest_expense', col=cur, sheet='IS')}"
+                              if has_interest else 0.0))
+        s.line("debt_current", f"Total debt, end of FY{y0}",
+               value=lambda: f"={s.r('total_debt', col=cur, sheet='BS')}")
+        s.line("debt_prior", f"Total debt, end of FY{y0 - 1}",
+               value=lambda: (f"={s.r('total_debt', col=prior, sheet='BS')}"
+                              if prior else f"={s.r('debt_current', col='D')}"))
+        s.line("average_debt", "Average funded debt", style="subtotal",
+               value=lambda: f"=AVERAGE({s.r('debt_current', col='D')},{s.r('debt_prior', col='D')})")
+        s.line("cap", "Cap on implied rate", value=lambda: MAX_IMPLIED_COST_OF_DEBT, fmt=PCT2)
+        s.line("implied_cost_of_debt", "Implied pre-tax cost of debt", fmt=PCT2,
+               value=lambda: (f"=IF({s.r('average_debt', col='D')}<=0,0,"
+                              f"MIN(MAX({s.r('interest_expense', col='D')}"
+                              f"/{s.r('average_debt', col='D')},0),{s.r('cap', col='D')}))"),
+               expect=lambda _: implied_cost_of_debt(sch) or 0.0)
+        override = self.a.market.pre_tax_cost_of_debt
+        s.line("blended_cost_of_debt",
+               "Pre-tax cost of debt used" + (" (assumption)" if override is not None
+                                              else " (implied)"),
+               style="total", fmt=PCT2,
+               value=lambda: override if override is not None
+               else f"={s.r('implied_cost_of_debt', col='D')}",
+               expect=lambda _: blended_cost_of_debt(sch, self.a.market))
 
     # ================================================================= DCF
     def _declare_dcf(self) -> None:
@@ -897,6 +987,8 @@ class WorkbookBuilder:
         pair("plus_cash", "Plus: cash & marketable securities", cash, cash)
         debt = lambda: f"=-{D('total_debt')}"  # noqa: E731
         pair("less_debt", "Less: total debt", debt, debt)
+        nci = lambda: f"=-{s.r('noncontrolling_interest', col=base, sheet='BS')}"  # noqa: E731
+        pair("less_minority", "Less: noncontrolling interests", nci, nci)
         tax = lambda: (f"=-IF({inp('deduct_repatriation_tax')}=1,"  # noqa: E731
                        f"{inp('foreign_cash')}*{inp('repatriation_tax_rate')},0)")
         pair("less_repatriation_tax", "Less: repatriation tax on offshore cash", tax, tax)
@@ -953,10 +1045,13 @@ class WorkbookBuilder:
                expect=val(lbo.entry, "entry_ev"))
         s.line("existing_debt", "Less: existing debt",
                value=lambda: f"={s.r('total_debt', col=base, sheet='BS')}")
+        s.line("noncontrolling_interest", "Less: noncontrolling interests (not acquired)",
+               value=lambda: f"={s.r('noncontrolling_interest', col=base, sheet='BS')}")
         s.line("cash_and_investments", "Plus: cash & marketable securities",
                value=lambda: f"={s.r('cash_and_investments', col=base, sheet='BS')}")
         s.line("equity_purchase_price", "Equity purchase price", style="subtotal",
-               value=lambda: f"={D('entry_ev')}-{D('existing_debt')}+{D('cash_and_investments')}",
+               value=lambda: f"={D('entry_ev')}-{D('existing_debt')}-{D('noncontrolling_interest')}"
+                             f"+{D('cash_and_investments')}",
                expect=val(lbo.entry, "equity_purchase_price"))
         s.line("diluted_shares", "Diluted shares (m)", fmt=NUM1,
                value=lambda: f"={inp('diluted_shares_outstanding')}")
@@ -1159,9 +1254,11 @@ class WorkbookBuilder:
         s.line("trapped_cash_after_tax", "Plus: trapped offshore cash, after repatriation tax",
                value=lambda: f"={D('trapped_cash')}*(1-{inp('repatriation_tax_rate')})",
                expect=val(lbo.exit, "trapped_cash_after_tax"))
+        s.line("exit_minority", "Less: noncontrolling interests",
+               value=lambda: f"={D('noncontrolling_interest')}")
         s.line("exit_equity", "Exit equity value", style="total",
                value=lambda: f"={D('exit_ev')}-{D('exit_debt')}+{D('exit_cash')}"
-                             f"+{D('trapped_cash_after_tax')}",
+                             f"+{D('trapped_cash_after_tax')}-{D('exit_minority')}",
                expect=val(lbo.exit, "exit_equity"))
         s.line("sponsor_cash_flow", "Sponsor cash flows", style="subtotal",
                cells={base: (lambda: f"=-{D('sponsor_equity')}", NUM)},
@@ -1244,7 +1341,12 @@ class WorkbookBuilder:
                 if line.expect is not None and isinstance(value, str) and value.startswith("="):
                     expected = line.expect(colkey)
                     if expected is not None:
-                        self.expected[f"{spec.name}!{col}{line.row}"] = float(expected)
+                        addr = f"{spec.name}!{col}{line.row}"
+                        self.expected[addr] = float(expected)
+                        if colkey in spec.hist_years and spec.name in ("IS", "BS", "CFS"):
+                            # Historical subtotals re-add reported components, which can
+                            # differ from the reported total by the filing's rounding.
+                            self.tolerances[addr] = DEFAULT_TOLERANCE
 
         ws.page_setup.orientation = "landscape"
         ws.page_setup.fitToWidth = 1
@@ -1266,7 +1368,8 @@ class WorkbookBuilder:
 
         banner(spec.hist_years, spec.hist_label, NAVY)
         banner(spec.proj_years, spec.proj_label, BLUE_HDR)
-        label = ws.cell(row=HEADER_ROW, column=2, value="Fiscal year ending September")
+        label = ws.cell(row=HEADER_ROW, column=2,
+                        value=f"Fiscal year ending {self.schema.metadata.fiscal_year_end:%B}")
         label.font = Font(name=FONT_NAME, bold=True, color="FFFFFF")
         for c in range(2, FIRST_YEAR_COL + len(self.all_years)):
             ws.cell(row=HEADER_ROW, column=c).fill = PatternFill("solid", fgColor=NAVY)
@@ -1407,7 +1510,7 @@ class WorkbookBuilder:
         n_last = x("DCF", "period_index", last)
         fcf_last = x("DCF", "unlevered_fcf", last)
         ebitda_last = x("IS", "ebitda", last)
-        bridge = "+".join(x("DCF", k, "D") for k in ("plus_cash", "less_debt",
+        bridge = "+".join(x("DCF", k, "D") for k in ("plus_cash", "less_debt", "less_minority",
                                                     "less_repatriation_tax"))
         shares = x("DCF", "shares", "D")
 
@@ -1548,7 +1651,8 @@ class WorkbookBuilder:
         ws.column_dimensions["D"].width = 10
         ws["B1"] = f"{self.schema.metadata.name}: Model Integrity Checks"
         ws["B1"].font = Font(name=FONT_NAME, size=14, bold=True, color=NAVY)
-        ws["B2"] = "Every check must be zero (within $0.5M). Flag 1 = error."
+        ws["B2"] = (f"Every check must be zero, within ${DEFAULT_TOLERANCE:,.0f}M (the filing's "
+                    "own rounding). Flag 1 = error.")
         ws["B2"].font = Font(name=FONT_NAME, size=9, italic=True, color="595959")
         first, last = 6, 6 + len(self.checks) - 1
         ws["B4"] = "MASTER CHECK"
@@ -1566,9 +1670,10 @@ class WorkbookBuilder:
             ws[f"C{r}"] = f"='{sheet}'!{addr}"
             ws[f"C{r}"].number_format = NUM1
             ws[f"C{r}"].font = Font(name=FONT_NAME, color="008000")
-            ws[f"D{r}"] = f"=IF(ABS(C{r})<0.5,0,1)"
+            ws[f"D{r}"] = f"=IF(ABS(C{r})<={CHECK_THRESHOLD},0,1)"
             ws[f"D{r}"].number_format = INT
             self.expected[f"Checks!C{r}"] = 0.0
+            self.tolerances[f"Checks!C{r}"] = CHECK_THRESHOLD
         self.expected["Checks!C4"] = "OK"  # type: ignore[assignment]
         self.master_check = "Checks!C4"
 
@@ -1638,14 +1743,33 @@ class WorkbookBuilder:
             "",
             "CONVENTIONS",
             "Interest is calculated on beginning-of-year balances (no circular references).",
-            "Funded debt is refinanced (held flat) in the standalone projection.",
-            "Offshore cash is valued net of the repatriation tax implied by the 10-K.",
-            f"Apple is far beyond any realised LBO size; the LBO is a hypothetical stress test.",
+            "Term debt is held flat in the projection; any cash shortfall is drawn on a revolver.",
+            "Dividends and buybacks are paid from positive earnings, limited to available cash.",
+            "Offshore cash (where disclosed) is valued net of the implied repatriation tax.",
+            "The LBO is an illustrative take-private analysis, not a financing commitment.",
         ]
+        if self.schema.derivation_notes:
+            notes += ["", f"DATA NOTES ({self.schema.data_source.upper()}): lines derived "
+                          "rather than reported"]
+            notes += [f"- {n}" for n in _condense_notes(self.schema.derivation_notes)]
         for i, text in enumerate(notes):
             cell = ws[f"B{start + i}"]
             cell.value = text
             cell.font = Font(name=FONT_NAME, bold=text.isupper() and bool(text), size=10)
+
+
+def _condense_notes(notes: list[str], limit: int = 25) -> list[str]:
+    """Merge notes that repeat across years: "FY2024: X" + "FY2025: X" ->
+    "FY2024, FY2025: X"."""
+    grouped: dict[str, list[str]] = {}
+    for note in notes:
+        prefix, sep, text = note.partition(": ")
+        if not sep:
+            prefix, text = "", note
+        grouped.setdefault(text, []).append(prefix)
+    lines = [f"{', '.join(sorted(p for p in prefixes if p))}: {text}".lstrip(": ")
+             for text, prefixes in grouped.items()]
+    return lines[:limit]
 
 
 @dataclass(frozen=True)
@@ -1658,6 +1782,8 @@ class WorkbookReport:
         formula_cells: Number of formula cells written.
         input_cells: Number of hard-coded numeric cells written.
         checks: Number of identity checks on the Checks sheet.
+        tolerances: Absolute tolerance for cells that need not match exactly
+            (historical subtotals re-added from rounded filing components).
     """
 
     path: Path
@@ -1665,6 +1791,7 @@ class WorkbookReport:
     formula_cells: int
     input_cells: int
     checks: int
+    tolerances: dict[str, float] = field(default_factory=dict)
 
 
 def write_workbook(model: ValuationModel, path: str | Path,
@@ -1696,4 +1823,5 @@ def write_workbook(model: ValuationModel, path: str | Path,
                 elif isinstance(cell.value, (int, float)) and cell.row > HEADER_ROW:
                     inputs += 1
     return WorkbookReport(path=path, expected=builder.expected, formula_cells=formulas,
-                          input_cells=inputs, checks=len(builder.checks))
+                          input_cells=inputs, checks=len(builder.checks),
+                          tolerances=builder.tolerances)

@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic inline XBRL 10-K for tests: "Widget Corp", USD millions, two fiscal years.
+     Exercises scale, number formats, nested markup, a fixed-zero dash, a duplicated
+     fact, a dimensional (segment) fact that must be ignored, and dei cover facts. -->
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:ix="http://www.xbrl.org/2013/inlineXBRL"
+      xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:us-gaap="http://fasb.org/us-gaap/2024"
+      xmlns:dei="http://xbrl.sec.gov/dei/2024" xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+      xmlns:xbrldi="http://xbrl.org/2006/xbrldi" xmlns:ixt="http://www.xbrl.org/inlineXBRL/transformation/2020-02-12">
+<head><title>Widget Corp 10-K</title></head>
+<body>
+<div style="display:none"><ix:header><ix:resources>
+  <xbrli:context id="FY2024"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+  <xbrli:context id="FY2023"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2023-01-01</xbrli:startDate><xbrli:endDate>2023-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+  <xbrli:context id="I2024"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:instant>2024-12-31</xbrli:instant></xbrli:period></xbrli:context>
+  <xbrli:context id="I2023"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:instant>2023-12-31</xbrli:instant></xbrli:period></xbrli:context>
+  <xbrli:context id="I2022"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:instant>2022-12-31</xbrli:instant></xbrli:period></xbrli:context>
+  <xbrli:context id="Cover"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:instant>2025-02-15</xbrli:instant></xbrli:period></xbrli:context>
+  <xbrli:context id="FY2024_ProductA"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier>
+    <xbrli:segment><xbrldi:explicitMember dimension="srt:ProductOrServiceAxis">wdgt:ProductAMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+  <xbrli:unit id="usd"><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unit>
+  <xbrli:unit id="shares"><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unit>
+  <xbrli:unit id="usdPerShare"><xbrli:divide><xbrli:unitNumerator><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unitNumerator>
+    <xbrli:unitDenominator><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unitDenominator></xbrli:divide></xbrli:unit>
+</ix:resources></ix:header></div>
+
+<p>Annual report on Form <ix:nonNumeric name="dei:DocumentType" contextRef="FY2024">10-K</ix:nonNumeric>
+for the fiscal year ended <ix:nonNumeric name="dei:DocumentPeriodEndDate" contextRef="FY2024">December 31, 2024</ix:nonNumeric>
+(fiscal year <ix:nonNumeric name="dei:DocumentFiscalYearFocus" contextRef="FY2024">2024</ix:nonNumeric>).</p>
+<p><ix:nonNumeric name="dei:EntityRegistrantName" contextRef="FY2024">Widget Corp</ix:nonNumeric>,
+CIK <ix:nonNumeric name="dei:EntityCentralIndexKey" contextRef="FY2024">0000123456</ix:nonNumeric>,
+ticker <ix:nonNumeric name="dei:TradingSymbol" contextRef="FY2024">WDGT</ix:nonNumeric>.
+Shares outstanding: <ix:nonFraction name="dei:EntityCommonStockSharesOutstanding" contextRef="Cover" unitRef="shares" decimals="0" format="ixt:num-dot-decimal">99,000,000</ix:nonFraction>.</p>
+
+<table>
+<tr><td>Revenue</td>
+  <td>$<ix:nonFraction name="us-gaap:Revenues" contextRef="FY2024" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal"><span style="font-weight:bold">1,000</span></ix:nonFraction></td>
+  <td>$<ix:nonFraction name="us-gaap:Revenues" contextRef="FY2023" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">900</ix:nonFraction></td></tr>
+<tr><td>Product A revenue (segment)</td>
+  <td><ix:nonFraction name="us-gaap:Revenues" contextRef="FY2024_ProductA" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">600</ix:nonFraction></td></tr>
+<tr><td>Cost of revenue</td>
+  <td><ix:nonFraction name="us-gaap:CostOfRevenue" contextRef="FY2024" unitRef="usd" scale="6" format="ixt:num-dot-decimal">600</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:CostOfRevenue" contextRef="FY2023" unitRef="usd" scale="6" format="ixt:num-dot-decimal">540</ix:nonFraction></td></tr>
+<tr><td>Research and development</td>
+  <td><ix:nonFraction name="us-gaap:ResearchAndDevelopmentExpense" contextRef="FY2024" unitRef="usd" scale="6">50</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:ResearchAndDevelopmentExpense" contextRef="FY2023" unitRef="usd" scale="6">45</ix:nonFraction></td></tr>
+<tr><td>Selling, general and administrative</td>
+  <td><ix:nonFraction name="us-gaap:SellingGeneralAndAdministrativeExpense" contextRef="FY2024" unitRef="usd" scale="6">150</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:SellingGeneralAndAdministrativeExpense" contextRef="FY2023" unitRef="usd" scale="6">135</ix:nonFraction></td></tr>
+<tr><td>Operating income</td>
+  <td><ix:nonFraction name="us-gaap:OperatingIncomeLoss" contextRef="FY2024" unitRef="usd" scale="6">200</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:OperatingIncomeLoss" contextRef="FY2023" unitRef="usd" scale="6">180</ix:nonFraction></td></tr>
+<tr><td>Interest expense</td>
+  <td><ix:nonFraction name="us-gaap:InterestExpense" contextRef="FY2024" unitRef="usd" scale="6">10</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:InterestExpense" contextRef="FY2023" unitRef="usd" scale="6">8</ix:nonFraction></td></tr>
+<tr><td>Income before income taxes</td>
+  <td><ix:nonFraction name="us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest" contextRef="FY2024" unitRef="usd" scale="6">190</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest" contextRef="FY2023" unitRef="usd" scale="6">172</ix:nonFraction></td></tr>
+<tr><td>Income tax expense</td>
+  <td><ix:nonFraction name="us-gaap:IncomeTaxExpenseBenefit" contextRef="FY2024" unitRef="usd" scale="6">40</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:IncomeTaxExpenseBenefit" contextRef="FY2023" unitRef="usd" scale="6">36</ix:nonFraction></td></tr>
+<tr><td>Net income</td>
+  <td><ix:nonFraction name="us-gaap:NetIncomeLoss" contextRef="FY2024" unitRef="usd" scale="6">150</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:NetIncomeLoss" contextRef="FY2023" unitRef="usd" scale="6">136</ix:nonFraction></td></tr>
+<tr><td>Net income (repeated in the MD&amp;A)</td>
+  <td><ix:nonFraction name="us-gaap:NetIncomeLoss" contextRef="FY2024" unitRef="usd" scale="6">150</ix:nonFraction></td></tr>
+<tr><td>Diluted EPS</td>
+  <td><ix:nonFraction name="us-gaap:EarningsPerShareDiluted" contextRef="FY2024" unitRef="usdPerShare" decimals="2">1.50</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:EarningsPerShareDiluted" contextRef="FY2023" unitRef="usdPerShare" decimals="2">1.36</ix:nonFraction></td></tr>
+<tr><td>Diluted shares</td>
+  <td><ix:nonFraction name="us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding" contextRef="FY2024" unitRef="shares" scale="6">100</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding" contextRef="FY2023" unitRef="shares" scale="6">100</ix:nonFraction></td></tr>
+<tr><td>Basic shares</td>
+  <td><ix:nonFraction name="us-gaap:WeightedAverageNumberOfSharesOutstandingBasic" contextRef="FY2024" unitRef="shares" scale="6">98</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:WeightedAverageNumberOfSharesOutstandingBasic" contextRef="FY2023" unitRef="shares" scale="6">98</ix:nonFraction></td></tr>
+</table>
+
+<table>
+<tr><td>Cash and cash equivalents</td>
+  <td><ix:nonFraction name="us-gaap:CashAndCashEquivalentsAtCarryingValue" contextRef="I2024" unitRef="usd" scale="6">200</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:CashAndCashEquivalentsAtCarryingValue" contextRef="I2023" unitRef="usd" scale="6">120</ix:nonFraction></td></tr>
+<tr><td>Accounts receivable</td>
+  <td><ix:nonFraction name="us-gaap:AccountsReceivableNetCurrent" contextRef="I2024" unitRef="usd" scale="6">150</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:AccountsReceivableNetCurrent" contextRef="I2023" unitRef="usd" scale="6">140</ix:nonFraction></td></tr>
+<tr><td>Inventories</td>
+  <td><ix:nonFraction name="us-gaap:InventoryNet" contextRef="I2024" unitRef="usd" scale="6">100</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:InventoryNet" contextRef="I2023" unitRef="usd" scale="6">90</ix:nonFraction></td></tr>
+<tr><td>Total current assets</td>
+  <td><ix:nonFraction name="us-gaap:AssetsCurrent" contextRef="I2024" unitRef="usd" scale="6">450</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:AssetsCurrent" contextRef="I2023" unitRef="usd" scale="6">350</ix:nonFraction></td></tr>
+<tr><td>Property and equipment, net</td>
+  <td><ix:nonFraction name="us-gaap:PropertyPlantAndEquipmentNet" contextRef="I2024" unitRef="usd" scale="6">550</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:PropertyPlantAndEquipmentNet" contextRef="I2023" unitRef="usd" scale="6">500</ix:nonFraction></td></tr>
+<tr><td>Goodwill</td>
+  <td><ix:nonFraction name="us-gaap:Goodwill" contextRef="I2024" unitRef="usd" scale="6" format="ixt:fixed-zero">&#8212;</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:Goodwill" contextRef="I2023" unitRef="usd" scale="6" format="ixt:fixed-zero">&#8212;</ix:nonFraction></td></tr>
+<tr><td>Total assets</td>
+  <td><ix:nonFraction name="us-gaap:Assets" contextRef="I2024" unitRef="usd" scale="6" format="ixt:num-dot-decimal">1,000</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:Assets" contextRef="I2023" unitRef="usd" scale="6">850</ix:nonFraction></td></tr>
+<tr><td>Accounts payable</td>
+  <td><ix:nonFraction name="us-gaap:AccountsPayableCurrent" contextRef="I2024" unitRef="usd" scale="6">80</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:AccountsPayableCurrent" contextRef="I2023" unitRef="usd" scale="6">70</ix:nonFraction></td></tr>
+<tr><td>Total current liabilities</td>
+  <td><ix:nonFraction name="us-gaap:LiabilitiesCurrent" contextRef="I2024" unitRef="usd" scale="6">150</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:LiabilitiesCurrent" contextRef="I2023" unitRef="usd" scale="6">130</ix:nonFraction></td></tr>
+<tr><td>Long-term debt</td>
+  <td><ix:nonFraction name="us-gaap:LongTermDebtNoncurrent" contextRef="I2024" unitRef="usd" scale="6">300</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:LongTermDebtNoncurrent" contextRef="I2023" unitRef="usd" scale="6">300</ix:nonFraction></td></tr>
+<tr><td>Total liabilities</td>
+  <td><ix:nonFraction name="us-gaap:Liabilities" contextRef="I2024" unitRef="usd" scale="6">450</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:Liabilities" contextRef="I2023" unitRef="usd" scale="6">430</ix:nonFraction></td></tr>
+<tr><td>Common stock and paid-in capital</td>
+  <td><ix:nonFraction name="us-gaap:CommonStocksIncludingAdditionalPaidInCapital" contextRef="I2024" unitRef="usd" scale="6">100</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:CommonStocksIncludingAdditionalPaidInCapital" contextRef="I2023" unitRef="usd" scale="6">100</ix:nonFraction></td></tr>
+<tr><td>Retained earnings</td>
+  <td><ix:nonFraction name="us-gaap:RetainedEarningsAccumulatedDeficit" contextRef="I2024" unitRef="usd" scale="6">450</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:RetainedEarningsAccumulatedDeficit" contextRef="I2023" unitRef="usd" scale="6">320</ix:nonFraction></td></tr>
+<tr><td>Total shareholders' equity</td>
+  <td><ix:nonFraction name="us-gaap:StockholdersEquity" contextRef="I2024" unitRef="usd" scale="6">550</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:StockholdersEquity" contextRef="I2023" unitRef="usd" scale="6">420</ix:nonFraction></td></tr>
+<tr><td>Total liabilities and equity</td>
+  <td><ix:nonFraction name="us-gaap:LiabilitiesAndStockholdersEquity" contextRef="I2024" unitRef="usd" scale="6" format="ixt:num-dot-decimal">1,000</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:LiabilitiesAndStockholdersEquity" contextRef="I2023" unitRef="usd" scale="6">850</ix:nonFraction></td></tr>
+</table>
+
+<table>
+<tr><td>Cash, beginning of year</td>
+  <td><ix:nonFraction name="us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents" contextRef="I2023" unitRef="usd" scale="6">120</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents" contextRef="I2022" unitRef="usd" scale="6">100</ix:nonFraction></td></tr>
+<tr><td>Cash, end of year</td>
+  <td><ix:nonFraction name="us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents" contextRef="I2024" unitRef="usd" scale="6">200</ix:nonFraction></td></tr>
+<tr><td>Depreciation and amortization</td>
+  <td><ix:nonFraction name="us-gaap:DepreciationDepletionAndAmortization" contextRef="FY2024" unitRef="usd" scale="6">50</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:DepreciationDepletionAndAmortization" contextRef="FY2023" unitRef="usd" scale="6">45</ix:nonFraction></td></tr>
+<tr><td>Increase in receivables</td>
+  <td><ix:nonFraction name="us-gaap:IncreaseDecreaseInAccountsReceivable" contextRef="FY2024" unitRef="usd" scale="6">10</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:IncreaseDecreaseInAccountsReceivable" contextRef="FY2023" unitRef="usd" scale="6">12</ix:nonFraction></td></tr>
+<tr><td>Increase in inventories</td>
+  <td><ix:nonFraction name="us-gaap:IncreaseDecreaseInInventories" contextRef="FY2024" unitRef="usd" scale="6">10</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:IncreaseDecreaseInInventories" contextRef="FY2023" unitRef="usd" scale="6">8</ix:nonFraction></td></tr>
+<tr><td>Increase in payables</td>
+  <td><ix:nonFraction name="us-gaap:IncreaseDecreaseInAccountsPayable" contextRef="FY2024" unitRef="usd" scale="6">10</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:IncreaseDecreaseInAccountsPayable" contextRef="FY2023" unitRef="usd" scale="6">9</ix:nonFraction></td></tr>
+<tr><td>Net cash from operating activities</td>
+  <td><ix:nonFraction name="us-gaap:NetCashProvidedByUsedInOperatingActivities" contextRef="FY2024" unitRef="usd" scale="6">190</ix:nonFraction></td>
+  <td><ix:nonFraction name="us-gaap:NetCashProvidedByUsedInOperatingActivities" contextRef="FY2023" unitRef="usd" scale="6">170</ix:nonFraction></td></tr>
+<tr><td>Capital expenditures</td>
+  <td>(<ix:nonFraction name="us-gaap:PaymentsToAcquirePropertyPlantAndEquipment" contextRef="FY2024" unitRef="usd" scale="6">100</ix:nonFraction>)</td>
+  <td>(<ix:nonFraction name="us-gaap:PaymentsToAcquirePropertyPlantAndEquipment" contextRef="FY2023" unitRef="usd" scale="6">95</ix:nonFraction>)</td></tr>
+<tr><td>Net cash used in investing activities</td>
+  <td>(<ix:nonFraction name="us-gaap:NetCashProvidedByUsedInInvestingActivities" contextRef="FY2024" unitRef="usd" scale="6" sign="-">100</ix:nonFraction>)</td>
+  <td>(<ix:nonFraction name="us-gaap:NetCashProvidedByUsedInInvestingActivities" contextRef="FY2023" unitRef="usd" scale="6" sign="-">95</ix:nonFraction>)</td></tr>
+<tr><td>Dividends paid</td>
+  <td>(<ix:nonFraction name="us-gaap:PaymentsOfDividends" contextRef="FY2024" unitRef="usd" scale="6">10</ix:nonFraction>)</td>
+  <td>(<ix:nonFraction name="us-gaap:PaymentsOfDividends" contextRef="FY2023" unitRef="usd" scale="6">55</ix:nonFraction>)</td></tr>
+<tr><td>Net cash used in financing activities</td>
+  <td>(<ix:nonFraction name="us-gaap:NetCashProvidedByUsedInFinancingActivities" contextRef="FY2024" unitRef="usd" scale="6" sign="-">10</ix:nonFraction>)</td>
+  <td>(<ix:nonFraction name="us-gaap:NetCashProvidedByUsedInFinancingActivities" contextRef="FY2023" unitRef="usd" scale="6" sign="-">55</ix:nonFraction>)</td></tr>
+</table>
+</body>
+</html>

@@ -4,26 +4,40 @@ Run locally::
 
     streamlit run streamlit_app.py
 
-What a visitor sees:
+What a visitor can do:
 
-- **By default:** the Apple FY2015 base case and the committed sample IC memo.
-- **When they flex the sidebar:** the projection, DCF, LBO, scenarios and
-  sensitivities recompute live, and the memo switches to the template version
-  for the new assumptions.
-- **With their own Anthropic API key:** Claude drafts a new memo. The app never
-  uses a server-side key, so hosting it costs the owner nothing.
+- **Value any US-listed operating company** by typing its ticker (the 10-K's XBRL data
+  is fetched from SEC EDGAR) or uploading the 10-K ``.htm`` from EDGAR, plus the
+  current share price. Assumptions are derived from the company's own filing.
+- **Explore the Apple FY2015 sample** (the default), built from the PDF 10-K.
+- **Flex the sidebar:** the projection, DCF, LBO, scenarios and sensitivities
+  recompute live.
+- **Generate a Claude memo with their own Anthropic API key.** The app never uses a
+  server-side Anthropic key, so hosting it costs the owner nothing.
+
+Configuration: set ``SEC_USER_AGENT`` (``"Your Name you@example.com"``, as the SEC
+requires) as an environment variable or a Streamlit secret.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 
 import anthropic
 import streamlit as st
 from pydantic import ValidationError
 
 from src import memo_generator
-from src.analyzer import AnalysisConfig, AnalysisResult, analysis_context, run_analysis
+from src.analyzer import (
+    GENERIC_SCENARIOS,
+    AnalysisConfig,
+    AnalysisResult,
+    analysis_context,
+    run_analysis,
+)
+from src.auto_assumptions import derive_assumptions
 from src.dashboard import (
     ASSUMPTIONS_FILE,
     SAMPLE_FILING,
@@ -42,54 +56,141 @@ from src.dashboard import (
 from src.exceptions import FinancialDataError
 from src.extractor import TenKExtractor
 from src.schemas import FinancialStatementSchema, ModelAssumptions
+from src.xbrl import parse_inline_xbrl
+from src.xbrl_mapping import build_schema, schema_from_ticker
 
 st.set_page_config(page_title="LBO & DCF Valuation Engine", page_icon=":material/monitoring:",
                    layout="wide")
 
-ControlItems = tuple[tuple[str, float], ...]
+# The SEC asks for a contact in the User-Agent; take it from Streamlit secrets if set.
+try:
+    if "SEC_USER_AGENT" in st.secrets:
+        os.environ.setdefault("SEC_USER_AGENT", str(st.secrets["SEC_USER_AGENT"]))
+except Exception:  # no secrets file: fall back to the environment
+    pass
+
+SAMPLE, TICKER, UPLOAD = "Apple FY2015 sample", "Look up a ticker", "Upload a 10-K (.htm)"
 
 
 # --------------------------------------------------------------------------------------
-# Cached computation (shared across sessions)
+# Cached loading and computation (shared across sessions)
 # --------------------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Extracting and validating the 10-K (first load only)...")
-def load_schema() -> FinancialStatementSchema:
-    """Parse the sample 10-K once per server."""
+@st.cache_resource(show_spinner="Extracting and validating the sample 10-K (first load only)...")
+def load_sample() -> FinancialStatementSchema:
+    """Parse the Apple sample PDF once per server."""
     return TenKExtractor(SAMPLE_FILING, ticker="AAPL").extract()
 
 
-@st.cache_resource(show_spinner=False)
-def load_config() -> tuple[ModelAssumptions, AnalysisConfig]:
-    """Base assumptions and scenario configuration."""
-    return ModelAssumptions.from_json(ASSUMPTIONS_FILE), AnalysisConfig.from_json(SCENARIOS_FILE)
+@st.cache_resource(max_entries=32, show_spinner="Fetching the 10-K's XBRL data from SEC EDGAR...")
+def load_ticker(ticker: str, fiscal_year: int | None) -> FinancialStatementSchema:
+    """Fetch and map a company's 10-K by ticker (cached per ticker and year)."""
+    return schema_from_ticker(ticker, fiscal_year)
 
 
-@st.cache_resource(max_entries=24,
+@st.cache_resource(max_entries=16, show_spinner="Reading the uploaded 10-K...")
+def load_upload(digest: str, _html: str, name: str) -> FinancialStatementSchema:
+    """Parse an uploaded inline-XBRL 10-K (cached by content hash)."""
+    return build_schema(parse_inline_xbrl(_html, source=name))
+
+
+@st.cache_resource(max_entries=32,
                    show_spinner="Running projection, DCF, LBO, scenarios and sensitivities...")
-def run(items: ControlItems) -> AnalysisResult:
-    """Full analysis for one set of control values (cached by value)."""
-    base, config = load_config()
-    return run_analysis(load_schema(), apply_controls(base, Controls(**dict(items))), config)
+def run(schema_json: str, assumptions_json: str, config_path: str) -> AnalysisResult:
+    """Full analysis for one company and assumption set (cached by value)."""
+    return run_analysis(FinancialStatementSchema.model_validate_json(schema_json),
+                        ModelAssumptions.model_validate_json(assumptions_json),
+                        AnalysisConfig.from_json(config_path))
 
 
 @st.cache_data(max_entries=8, show_spinner="Building the Excel workbook...")
-def build_workbook(items: ControlItems) -> bytes:
-    """Formula-driven workbook for one set of control values."""
-    return workbook_bytes(run(items))
+def build_workbook(schema_json: str, assumptions_json: str, config_path: str) -> bytes:
+    """Formula-driven workbook for one analysis."""
+    return workbook_bytes(run(schema_json, assumptions_json, config_path))
 
 
-@st.cache_data(max_entries=24, show_spinner=False)
-def template_memo(items: ControlItems) -> str:
-    """Deterministic memo for one set of control values."""
-    return memo_generator.generate_memo(run(items), offline=True).markdown
+@st.cache_data(max_entries=32, show_spinner=False)
+def template_memo(schema_json: str, assumptions_json: str, config_path: str) -> str:
+    """Deterministic memo for one analysis."""
+    return memo_generator.generate_memo(run(schema_json, assumptions_json, config_path),
+                                        offline=True).markdown
+
+
+def stop_with(message: str) -> None:
+    """Show an error and halt this run."""
+    st.error(message, icon=":material/error:")
+    st.stop()
 
 
 # --------------------------------------------------------------------------------------
-# Sidebar
+# Sidebar: company
 # --------------------------------------------------------------------------------------
-base_assumptions, analysis_config = load_config()
+with st.sidebar:
+    st.header("Company")
+    mode = st.radio("Source", [SAMPLE, TICKER, UPLOAD], key="mode", label_visibility="collapsed")
+    schema: FinancialStatementSchema | None = None
+    company_key = "sample"
+    share_price: float | None = None
+    try:
+        if mode == SAMPLE:
+            schema = load_sample()
+        elif mode == TICKER:
+            with st.form("ticker_form", border=False):
+                ticker = st.text_input("Ticker", placeholder="e.g. MSFT", key="ticker_input")
+                fy = st.number_input("Fiscal year of the 10-K (0 = latest)", 0, 2100, 0,
+                                     key="fy_input")
+                price_in = st.number_input("Current share price (USD)", 0.0, 1e6, 0.0,
+                                           step=1.0, format="%.2f", key="price_ticker")
+                st.form_submit_button("Value company", type="primary")
+            if ticker.strip() and price_in > 0:
+                schema = load_ticker(ticker.strip().upper(), int(fy) or None)
+                company_key, share_price = f"ticker:{ticker.strip().upper()}:{int(fy)}", price_in
+        else:
+            upload = st.file_uploader("10-K .htm from EDGAR", type=["htm", "html", "xhtml"],
+                                      key="upload")
+            price_in = st.number_input("Current share price (USD)", 0.0, 1e6, 0.0,
+                                       step=1.0, format="%.2f", key="price_upload")
+            if upload is not None and price_in > 0:
+                raw = upload.getvalue()
+                digest = hashlib.sha256(raw).hexdigest()
+                schema = load_upload(digest, raw.decode("utf-8", errors="replace"), upload.name)
+                company_key, share_price = f"upload:{digest}", price_in
+    except (FinancialDataError, ValidationError) as exc:
+        stop_with(f"This filing could not be modelled.\n\n{exc}")
+
+if schema is None:
+    st.title("Automated LBO & DCF Valuation Engine")
+    st.info("Enter a ticker or upload a 10-K, together with the current share price, in the "
+            "sidebar. Data comes from the 10-K's XBRL financial statements on SEC EDGAR.",
+            icon=":material/arrow_back:")
+    st.markdown(
+        "- **Ticker lookup** fetches the most recent 10-K (or the fiscal year you choose).\n"
+        "- **Upload** accepts the 10-K `.htm` document from EDGAR (inline XBRL, filed since "
+        "2019-2021). PDFs are not accepted: the XBRL data is what makes any company work.\n"
+        "- **In scope:** US-listed operating companies reporting in USD. Banks, insurers and "
+        "other unclassified balance sheets are out of scope, as are years with operating "
+        "losses (their margins would have to be invented).")
+    st.stop()
+
+# Assumptions: the hand-written config for the sample, derived from the filing otherwise.
+try:
+    if mode == SAMPLE:
+        base_assumptions = ModelAssumptions.from_json(ASSUMPTIONS_FILE)
+        config_path = str(SCENARIOS_FILE)
+    else:
+        base_assumptions = derive_assumptions(schema, share_price)  # type: ignore[arg-type]
+        config_path = str(GENERIC_SCENARIOS)
+except (FinancialDataError, ValidationError) as exc:
+    stop_with(f"Default assumptions could not be derived for this company.\n\n{exc}")
+
 defaults = Controls.from_assumptions(base_assumptions)
 CONTROL_KEYS = list(defaults.as_dict())
+
+# A new company resets the sliders to its own defaults.
+if st.session_state.get("company_key") != company_key:
+    for key in CONTROL_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state["company_key"] = company_key
+    st.session_state.pop("claude_memo", None)
 
 
 def reset_controls() -> None:
@@ -98,28 +199,36 @@ def reset_controls() -> None:
         st.session_state.pop(key, None)
 
 
-def pct(label: str, key: str, lo: float, hi: float, step: float, help_: str) -> float:
-    """Slider in percent that returns a decimal."""
-    default = getattr(defaults, key) * 100
-    return st.slider(label, lo, hi, round(default, 2), step, format="%.1f%%", key=key,
-                     help=help_) / 100
+def pct(label: str, key: str, lo: float, hi: float, step: float, help_: str = "") -> float:
+    """Slider in percent that returns a decimal; the range always contains the default."""
+    default = round(getattr(defaults, key) * 100, 2)
+    return st.slider(label, min(lo, default), max(hi, default), default, step,
+                     format="%.1f%%", key=key, help=help_ or None) / 100
+
+
+def multiple(label: str, key: str) -> float:
+    """Multiple slider ranging from half to double the company's default."""
+    default = round(getattr(defaults, key), 2)
+    return st.slider(label, round(max(1.0, default / 2), 1), round(default * 2, 1), default,
+                     0.5, format="%.1fx", key=key)
 
 
 with st.sidebar:
     st.header("Assumptions")
-    st.caption("Defaults are the base case in `config/assumptions.json`.")
+    st.caption("Defaults: " + ("`config/assumptions.json`." if mode == SAMPLE else
+                               "derived from the company's own 10-K (see the Inputs sheet)."))
     st.button("Reset to base case", on_click=reset_controls, icon=":material/restart_alt:")
 
     st.subheader("LBO transaction")
-    entry = st.slider("Entry EV / EBITDA", 4.0, 12.0, defaults.entry_multiple, 0.5,
-                      format="%.1fx", key="entry_multiple")
-    exit_ = st.slider("Exit EV / EBITDA", 4.0, 14.0, defaults.exit_multiple, 0.5,
-                      format="%.1fx", key="exit_multiple")
-    debt = pct("Debt, % of entry EV", "debt_pct", 20.0, 80.0, 5.0,
+    entry = multiple("Entry EV / EBITDA", "entry_multiple")
+    exit_ = multiple("Exit EV / EBITDA", "exit_multiple")
+    debt = pct("Debt, % of entry EV", "debt_pct", 5.0, 90.0, 5.0,
                "Acquisition debt as a share of entry enterprise value.")
-    repat = pct("Offshore cash repatriated at close", "foreign_cash_usable_pct", 0.0, 100.0,
-                25.0, "Share of the $186.9B held offshore that is brought home, net of "
-                      "the repatriation tax, to fund the deal.")
+    repat = defaults.foreign_cash_usable_pct
+    if schema.foreign_cash_and_investments:
+        repat = pct("Offshore cash repatriated at close", "foreign_cash_usable_pct", 0.0,
+                    100.0, 25.0, "Share of the offshore cash disclosed in the 10-K that is "
+                                 "brought home, net of the repatriation tax, to fund the deal.")
 
     st.subheader("Operations (all projection years)")
     growth = pct("Revenue growth shift", "revenue_growth_shift", -6.0, 6.0, 0.5,
@@ -128,42 +237,45 @@ with st.sidebar:
                  "Added to every year's base-case gross margin.")
 
     st.subheader("DCF valuation")
-    rf = pct("Risk-free rate", "risk_free_rate", 0.5, 6.0, 0.05, "10-year Treasury yield.")
-    erp = pct("Equity risk premium", "equity_risk_premium", 3.0, 9.0, 0.25, "")
-    beta = st.slider("Levered beta", 0.5, 2.0, defaults.levered_beta, 0.05, key="levered_beta")
+    rf = pct("Risk-free rate", "risk_free_rate", 0.5, 7.0, 0.05, "10-year Treasury yield.")
+    erp = pct("Equity risk premium", "equity_risk_premium", 3.0, 9.0, 0.25)
+    beta = st.slider("Levered beta", min(0.3, defaults.levered_beta), max(2.5, defaults.levered_beta),
+                     defaults.levered_beta, 0.05, key="levered_beta")
     tg = pct("Terminal growth", "terminal_growth_rate", 0.0, 4.0, 0.25, "Gordon Growth method.")
-    dcf_mult = st.slider("Terminal EV / EBITDA", 5.0, 16.0, defaults.dcf_exit_multiple, 0.5,
-                         format="%.1fx", key="dcf_exit_multiple")
+    dcf_mult = multiple("Terminal EV / EBITDA", "dcf_exit_multiple")
 
 controls = Controls(
     entry_multiple=entry, exit_multiple=exit_, debt_pct=debt, foreign_cash_usable_pct=repat,
     revenue_growth_shift=growth, gross_margin_shift=margin, risk_free_rate=rf,
     equity_risk_premium=erp, levered_beta=beta, terminal_growth_rate=tg,
     dcf_exit_multiple=dcf_mult)
-items: ControlItems = tuple(sorted(controls.as_dict().items()))
 is_base_case = controls == defaults
 
 try:
-    analysis = run(items)
+    assumptions = apply_controls(base_assumptions, controls)
+    run_key = (schema.model_dump_json(), assumptions.model_dump_json(), config_path)
+    analysis = run(*run_key)
 except (ValidationError, FinancialDataError) as exc:
-    st.error(f"These assumptions are not valid together:\n\n{exc}")
-    st.stop()
+    stop_with(f"These assumptions are not valid together:\n\n{exc}")
 
 model = analysis.base.model
 lbo, dcf, rec = model.lbo, model.dcf, analysis.recommendation
 price = model.assumptions.market.share_price
+md = model.schema.metadata
 
 # --------------------------------------------------------------------------------------
 # Header & KPIs
 # --------------------------------------------------------------------------------------
-st.title("Automated LBO & DCF Valuation Engine")
-st.caption("Apple Inc. 10-K (fiscal year ended 26 September 2015) → validated 3-statement "
-           "model, DCF, LBO stress test and investment committee memo. A hypothetical "
-           "take-private: Apple is far larger than any leveraged buyout ever completed.")
+st.title(f"{md.name}" + (f" ({md.ticker})" if md.ticker else ""))
+source_text = ("10-K PDF" if model.schema.data_source == "pdf"
+               else "10-K XBRL data from SEC EDGAR")
+st.caption(f"{source_text}, fiscal year ended {md.fiscal_year_end:%d %B %Y} → validated "
+           f"3-statement model, DCF, LBO and investment committee memo. "
+           f"{analysis_context(analysis)['framing']}")
 
 if not is_base_case:
     st.info("Showing custom assumptions. Use **Reset to base case** in the sidebar to "
-            "return to the sample.", icon=":material/tune:")
+            "return to the defaults.", icon=":material/tune:")
 verdict = f"**Recommendation: {rec.verdict}**"
 if rec.verdict == "PASS":
     st.error(f"{verdict}. Not met: {'; '.join(rec.failed)}.", icon=":material/block:")
@@ -204,17 +316,22 @@ with tab_overview:
             (lambda v: f"{v:.1%}") if ("%" in row.name or "growth" in row.name)
             else (lambda v: f"${v / 1_000:,.1f}B")), axis=1).replace("nan%", "")
         st.dataframe(shown.rename(columns=lambda y: f"FY{y}"), width="stretch")
-        st.caption("Extracted from the PDF. Every accounting identity (A = L + E, cash and "
-                   "retained-earnings roll-forwards, debt note to balance sheet) is verified "
-                   "on extraction and again for every projected year.")
+        st.caption("Every accounting identity (A = L + E, the cash roll-forward, net income "
+                   "ties) is verified on extraction and again for every projected year.")
     s = model.schema
-    st.subheader("What the filing says about the cash")
-    c = st.columns(3)
-    c[0].metric("Cash & securities", f"${s.balance_sheet(s.latest_year).cash_and_investments / 1e3:,.1f}B")
-    c[1].metric("Held offshore", f"${(s.foreign_cash_and_investments or 0) / 1e3:,.1f}B")
-    c[2].metric("Implied repatriation tax", f"{s.implied_repatriation_tax_rate or 0:.1%}",
-                help="$30.0B unrecognized deferred tax liability / $91.5B undistributed "
-                     "foreign earnings, both disclosed in the 10-K.")
+    if s.foreign_cash_and_investments:
+        st.subheader("What the filing says about the cash")
+        c = st.columns(3)
+        c[0].metric("Cash & securities",
+                    f"${s.balance_sheet(s.latest_year).cash_and_investments / 1e3:,.1f}B")
+        c[1].metric("Held offshore", f"${s.foreign_cash_and_investments / 1e3:,.1f}B")
+        c[2].metric("Implied repatriation tax", f"{s.implied_repatriation_tax_rate or 0:.1%}",
+                    help="Unrecognized deferred tax liability / undistributed foreign "
+                         "earnings, both disclosed in the 10-K.")
+    if s.derivation_notes:
+        with st.expander(f"Data notes: {len(s.derivation_notes)} lines derived rather than "
+                         "reported", icon=":material/info:"):
+            st.markdown("\n".join(f"- {n}" for n in s.derivation_notes))
 
 # --------------------------------------------------------------------------------------
 # DCF
@@ -308,12 +425,12 @@ with tab_scen:
 # IC memo
 # --------------------------------------------------------------------------------------
 claude_memo = st.session_state.get("claude_memo")
-if claude_memo and claude_memo["items"] == items:
+if claude_memo and claude_memo["run_key"] == run_key:
     memo_md, memo_label = claude_memo["markdown"], "Memo drafted by Claude for these assumptions"
-elif is_base_case and SAMPLE_MEMO.is_file():
+elif mode == SAMPLE and is_base_case and SAMPLE_MEMO.is_file():
     memo_md, memo_label = SAMPLE_MEMO.read_text(encoding="utf-8"), "Sample memo (base case)"
 else:
-    memo_md, memo_label = template_memo(items), "Template memo for these assumptions"
+    memo_md, memo_label = template_memo(*run_key), "Template memo for these assumptions"
 
 with tab_memo:
     with st.expander("Generate a new memo with Claude, using your own Anthropic API key",
@@ -343,7 +460,7 @@ with tab_memo:
                     st.error(str(exc))
                 else:
                     st.session_state["claude_memo"] = {"markdown": memo.markdown,
-                                                       "items": items}
+                                                       "run_key": run_key}
                     status.update(label="Memo generated", state="complete")
                     st.rerun()
 
@@ -364,7 +481,7 @@ with tab_files:
         "- **IC memo:** the memo currently shown on the IC memo tab.\n"
         "- **Data pack:** the JSON the memo is written from.")
     c = st.columns(3)
-    c[0].download_button("Excel model (.xlsx)", build_workbook(items), file_name="model.xlsx",
+    c[0].download_button("Excel model (.xlsx)", build_workbook(*run_key), file_name="model.xlsx",
                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                          icon=":material/table:", key="xlsx_download")
     c[1].download_button("IC memo (.md)", memo_md, file_name="ic_memo.md",

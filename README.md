@@ -1,10 +1,16 @@
 # Automated M&A / PE Valuation Engine
 
-An end-to-end Python engine that reads an SEC 10-K, extracts audited financials into
-a validated data model, and drives a linked 3-statement model, a DCF, and an LBO
-returns analysis, exported as a fully formula-driven Excel workbook. It then
-stress-tests the deal across scenarios and sensitivity grids and writes an investment
-committee memo, with the narrative drafted by Claude.
+An end-to-end Python engine that values **any US-listed operating company from its
+10-K**. Give it a ticker, or the 10-K `.htm` from SEC EDGAR, plus the current share
+price. It builds a validated 3-statement model, a DCF and an LBO returns analysis,
+exports them as a fully formula-driven Excel workbook, stress-tests the deal across
+scenarios and sensitivity grids, and writes an investment committee memo, with the
+narrative drafted by Claude.
+
+```bash
+python -m src.analyzer MSFT --share-price 420        # any ticker: 10-K data from SEC EDGAR
+python -m src.analyzer path/to/10-k.htm --share-price 55.10
+```
 
 **Principle:** a number only enters the model if it ties. Every schema re-derives its
 own subtotals and checks the accounting identities (A = L + E, cash roll-forward,
@@ -18,12 +24,66 @@ NI → retained earnings, debt note → balance sheet) at construction time, for
 | 1 | 10-K ingestion, Pydantic schemas, identity validation | **Done** |
 | 2 | 3-statement projection, DCF (WACC, Gordon + exit multiple), LBO waterfall, Excel export | **Done** |
 | 3 | Sensitivity matrices, Base/Bull/Bear scenarios, risk metrics, Claude-generated IC memo | **Done** |
+| 4 | Any company: XBRL ingestion (ticker or `.htm`), concept mapping, derived assumptions, web app | **Done** |
+
+## Valuing any company
+
+Every 10-K carries its financial statements as XBRL facts with standard US-GAAP tags.
+The engine reads those facts, so it does not depend on any company's statement layout:
+
+1. **Ingest** (`src/xbrl.py`): by ticker, through the SEC's `companyfacts` API
+   (restricted to one 10-K filing), or from an uploaded inline-XBRL `.htm` 10-K. Both
+   routes produce identical statements for the same filing (verified on Home Depot
+   and Coca-Cola).
+2. **Map** (`src/xbrl_mapping.py`): each schema line has a priority list of US-GAAP
+   concepts. Where a filing reports a total without the breakdown, the remainder goes
+   to a labelled "other" line, and every such derivation is recorded as a **data
+   note**, shown on the workbook cover and in the app. Independently reported figures
+   are still hard-checked: total assets = total liabilities & equity, the cash
+   roll-forward, and EPS = net income / diluted shares.
+3. **Derive assumptions** (`src/auto_assumptions.py`) from the company's own history:
+   - **Growth:** trailing revenue CAGR fading to 3%.
+   - **Ratios:** latest-year margins and cost ratios.
+   - **Tax:** effective tax rate, clamped to 10%-30%.
+   - **Payouts:** dividend and buyback ratios.
+   - **Entry price:** a 30% control premium.
+   - **Leverage:** debt sized at 5.0x EBITDA.
+   - **Market inputs:** risk-free rate, ERP and beta are defaults marked **VERIFY**.
+
+   Every value records its derivation and can be overridden (`--overrides file.json`, or
+   the app's sidebar).
+4. **Model, stress-test and write up** exactly as for the Apple sample, with generic
+   Bull / Bear cases (`config/scenarios_generic.json`): growth ±2/4 points, margin
+   ±1/2 points, exit multiple ±1/1.5 turns.
+
+**Verified on 20 companies** (each one's latest 10-K, run offline from SEC data):
+
+| Result | Companies |
+|---|---|
+| Modelled, workbook reconciles to Python with the master check **OK** (18) | AAPL, ADBE, BA, CAT, COST, HD, JNJ, KO, MCD, MSFT, NKE, NVDA, ORCL, PEP, PG, TSLA, UNH, WMT |
+| Out of scope, refused with a clear reason (2) | DE (unclassified balance sheet, finance arm), INTC (operating loss in the latest year) |
+
+Real-filing quirks the mapper handles, each disclosed in the data notes:
+- **McDonald's:** share counts tagged in millions; no COGS line; negative equity.
+- **Tesla and UnitedHealth:** mezzanine (temporary) equity.
+- **Boeing:** preferred dividends, so the EPS cross-check is skipped.
+- **Microsoft and Oracle:** split SG&A tags.
+- **Nike and J&J:** EBIT derived from pre-tax income and net interest.
+- **Oracle:** capex above operating cash flow, funded by revolver draws in the projection.
+
+**Scope.** US-listed operating companies reporting in USD with a classified balance
+sheet. Banks, insurers and finance-arm groups are refused, and so are years with an
+operating loss (the default projection would have to invent a margin).
+
+**SEC access.** Set `SEC_USER_AGENT="Your Name you@example.com"` as an environment
+variable or Streamlit secret; the SEC asks every requester to identify itself.
 
 ## Sample case: Apple Inc. FY2015 (hypothetical take-private stress test)
 
-The sample filing is Apple's 10-K for the fiscal year ended 26 September 2015. Apple is
-far beyond the size of any leveraged buyout ever done, so the LBO is run as a
-**hypothetical stress test**. The engine itself does not depend on the company.
+The committed sample is Apple's 10-K for the fiscal year ended 26 September 2015,
+extracted from a PDF with hand-written assumptions (`config/assumptions.json`). Apple
+is far beyond the size of any leveraged buyout ever done, so the LBO is run as a
+**hypothetical stress test**.
 
 Extracted from the filing and verified (USD millions):
 
@@ -76,16 +136,19 @@ python -m venv .venv
 .venv/Scripts/activate            # Windows; use `source .venv/bin/activate` on macOS/Linux
 pip install -e ".[dev,memo,app]"
 
-python -m src.extractor data/raw/apple_10k_fy2015.pdf --ticker AAPL   # -> outputs/extracted/*.json
-python -m src.analyzer outputs/extracted/apple_inc_fy2015.json        # -> model.xlsx, memo.md, analysis.json
-streamlit run streamlit_app.py                                        # -> interactive dashboard
+python -m src.analyzer HD --share-price 380             # any company -> outputs/HD/
+python -m src.analyzer outputs/extracted/apple_inc_fy2015.json   # Apple sample -> outputs/
+streamlit run streamlit_app.py                           # interactive dashboard
 pytest
 ```
 
 `src.analyzer` runs the whole pipeline: projection, DCF, LBO, scenarios, sensitivities
-and the memo. (`src.modeling_engine` alone writes the workbook without the Phase 3
-sheets.) Every command also accepts the PDF directly, and exits with code 1, printing
-every failed identity, if anything does not tie.
+and the memo, writing `model.xlsx`, `memo.md` and `analysis.json`.
+- **Input:** a ticker or CIK, an EDGAR 10-K `.htm`, the Apple PDF, or extracted JSON.
+- **Other options:** `--fiscal-year` picks an older 10-K, and `--overrides` adjusts the
+  derived assumptions.
+- **Errors:** any data problem exits with code 1 and prints the reason (an
+  out-of-scope filing, or every failed identity).
 
 **Claude memo narrative.** With `ANTHROPIC_API_KEY` set (`pip install -e ".[memo]"`),
 the analyzer drafts the memo with Claude (`claude-opus-5-5`). Without credentials, or
@@ -96,10 +159,13 @@ the memo header.
 
 An interactive dashboard over the same engine:
 
-- **Opens on the sample.** Visitors land on the Apple base case and the committed
-  sample memo.
-- **The sidebar flexes the deal.** Entry and exit multiples, leverage, offshore cash
-  repatriation, growth and margin shifts, and the DCF inputs are all adjustable.
+- **Any company.** Choose *Look up a ticker* or *Upload a 10-K (.htm)*, enter the
+  share price, and the full analysis runs on that company's filing. The Apple sample
+  (with its committed memo) is the default view.
+- **The sidebar flexes the deal.** Entry and exit multiples, leverage, growth and
+  margin shifts, and the DCF inputs are all adjustable, with ranges scaled to each
+  company's defaults.
+- **Data notes.** Any line derived rather than reported is listed on the Overview tab.
 - **Everything recomputes live.** Each change reruns the projection, DCF, LBO,
   scenarios and sensitivities across six tabs: Overview, DCF, LBO, Scenarios, IC memo
   and Downloads.
@@ -109,8 +175,9 @@ An interactive dashboard over the same engine:
 **Claude memos use the visitor's own API key.** The IC memo tab has a password field
 for an Anthropic API key:
 
-- **The app holds no key of its own.** It never reads `st.secrets` or the environment
-  for one, so hosting it costs the owner nothing.
+- **The app holds no Anthropic key of its own.** It never reads one from `st.secrets`
+  or the environment, so hosting it costs the owner nothing. (The only secret it reads
+  is the non-sensitive `SEC_USER_AGENT`.)
 - **A visitor's key is used only for their request.** It is held in memory for their
   browser session and never stored or logged.
 - **Problems are reported.** A rejected key or an unreachable API produces an error
@@ -123,10 +190,11 @@ for an Anthropic API key:
    the repository, branch `main` and main file `streamlit_app.py`.
 3. Under **Advanced settings**, choose Python 3.12 or later. Dependencies install from
    `requirements.txt`.
-4. Leave **Secrets** empty: the app needs none.
+4. Under **Secrets**, add one line: `SEC_USER_AGENT = "Your Name you@example.com"`.
+   No Anthropic key is needed.
 
-The first page load extracts the 10-K, which takes 10–20 seconds. The result is cached
-for every visitor after that.
+The first page load extracts the Apple sample PDF, which takes 10–20 seconds; ticker
+lookups take a few seconds. Results are cached for every visitor after that.
 
 ## The Excel model (`outputs/model.xlsx`)
 
@@ -180,13 +248,17 @@ prompt chain on `claude-opus-5-5`:
 ## Project layout
 
 ```
-config/assumptions.json   Market, operating and transaction assumptions, each with a source
-config/scenarios.json     Bull / Bear overrides, investment criteria, sensitivity grid axes
-data/raw/                 Source filings
+config/assumptions.json   Apple sample: market, operating and transaction assumptions
+config/scenarios.json     Apple sample: Bull / Bear overrides, criteria, grid axes
+config/scenarios_generic.json  Any company: relative Bull / Bear shifts, criteria, grids
+data/raw/                 Source filings (Apple sample PDF)
 src/exceptions.py         Error hierarchy (AccountingIdentityError, AssumptionError, ...)
 src/schemas.py            Pydantic models: statements, debt, assumptions, identity checks
 src/metrics.py            Pure formulas (UFCF, NOPAT, EBITDA, NPV, IRR): unit-tested
-src/extractor.py          10-K -> FinancialStatementSchema pipeline and CLI
+src/xbrl.py               XBRL ingestion: SEC companyfacts by ticker, inline-XBRL .htm parser
+src/xbrl_mapping.py       US-GAAP concepts -> validated statements, with data notes
+src/auto_assumptions.py   Per-company assumptions derived from the filing + share price
+src/extractor.py          Apple sample: 10-K PDF -> FinancialStatementSchema
 src/modeling_engine.py    3-statement projection, DCF, LBO, and CLI
 src/excel_export.py       Formula-driven openpyxl workbook
 src/analyzer.py           Scenarios, sensitivity grids, risk metrics, recommendation, CLI
@@ -194,7 +266,8 @@ src/memo_generator.py     Claude prompt chain, memo validation, template fallbac
 src/dashboard.py          Pure helpers for the web app: controls, charts, workbook bytes
 streamlit_app.py          Streamlit dashboard (entry point for Streamlit Community Cloud)
 requirements.txt          Runtime dependencies for the hosted app
-tests/                    142 pytest tests (Claude calls via a fake client; app via AppTest)
+tests/                    166 pytest tests, all offline (SEC data via trimmed fixtures;
+                          Claude via a fake client; app via AppTest)
 outputs/                  Generated JSON, model.xlsx, memo.md, analysis.json
 ```
 

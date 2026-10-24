@@ -1,0 +1,46 @@
+{
+  "investment_criteria": {
+    "target_irr": 0.20,
+    "minimum_moic": 2.0,
+    "require_base_case_covenant_compliance": true,
+    "sources": {
+      "target_irr": "Typical buyout hurdle rate.",
+      "minimum_moic": "2.0x over a 5-year hold, consistent with the IRR hurdle.",
+      "require_base_case_covenant_compliance": "No maintenance covenant breach permitted in the base case."
+    }
+  },
+  "scenarios": [
+    {
+      "name": "Base",
+      "description": "Derived from the company's own 10-K: trailing growth fading to 3%, latest-year margins and cost ratios.",
+      "overrides": {},
+      "shifts": {}
+    },
+    {
+      "name": "Bull",
+      "description": "Revenue growth 2 percentage points higher each year, gross margin 1 point higher, exit one turn of EBITDA higher.",
+      "shifts": {
+        "operating.revenue_growth": 0.02,
+        "operating.gross_margin": 0.01,
+        "transaction.exit_ev_ebitda_multiple": 1.0
+      }
+    },
+    {
+      "name": "Bear",
+      "description": "Revenue growth 4 percentage points lower each year, gross margin 2 points lower, exit 1.5 turns of EBITDA lower.",
+      "shifts": {
+        "operating.revenue_growth": -0.04,
+        "operating.gross_margin": -0.02,
+        "transaction.exit_ev_ebitda_multiple": -1.5
+      }
+    }
+  ],
+  "sensitivity_grids": {
+    "wacc_step": 0.005,
+    "growth_step": 0.005,
+    "dcf_exit_multiple_step": 1.0,
+    "lbo_entry_multiple_step": 1.0,
+    "lbo_debt_pct_step": 0.10,
+    "steps_each_side": 2
+  }
+}

@@ -5,5 +5,5 @@ primaryColor = "#1F3864"
 gatherUsageStats = false
 
 [server]
-# Uploads are not used; keep the request size small.
-maxUploadSize = 5
+# 10-K .htm documents from EDGAR are typically 2-20 MB.
+maxUploadSize = 50

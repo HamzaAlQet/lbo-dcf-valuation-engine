@@ -24,6 +24,7 @@ import copy
 import json
 import logging
 import math
+import re
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -60,25 +61,35 @@ class InvestmentCriteria(StrictModel):
 
 
 class ScenarioSpec(StrictModel):
-    """A named scenario: a deep override of the base assumption file."""
+    """A named scenario.
+
+    ``overrides`` replace values outright (deep merge). ``shifts`` add to the base
+    value and are keyed by dotted path, e.g. ``{"operating.revenue_growth": 0.02}``;
+    a shift on a per-year list applies to every year. Shifts make a scenario generic,
+    so the same Bull / Bear definitions work for any company.
+    """
 
     name: str = Field(min_length=1)
     description: str
     overrides: dict[str, Any] = Field(default_factory=dict)
+    shifts: dict[str, float] = Field(default_factory=dict)
 
 
 class SensitivityGrids(StrictModel):
     """Axis definitions for the sensitivity matrices.
 
-    DCF axes are centred on the base-case value and step outwards, so the tables
-    stay centred when assumptions change. LBO axes are explicit lists.
+    Axes are centred on the base-case value and step outwards, so the tables stay
+    centred when assumptions change. The LBO axes may instead be given as explicit
+    lists (the Apple sample does this).
     """
 
     wacc_step: float = Field(gt=0.0)
     growth_step: float = Field(gt=0.0)
     dcf_exit_multiple_step: float = Field(gt=0.0)
-    lbo_entry_multiples: list[float] = Field(min_length=2)
-    lbo_debt_pcts: list[float] = Field(min_length=2)
+    lbo_entry_multiples: list[float] = Field(default_factory=list)
+    lbo_debt_pcts: list[float] = Field(default_factory=list)
+    lbo_entry_multiple_step: float = Field(default=1.0, gt=0.0)
+    lbo_debt_pct_step: float = Field(default=0.10, gt=0.0)
     steps_each_side: int = Field(default=2, ge=1, le=5)
 
 
@@ -120,6 +131,24 @@ def apply_overrides(base: ModelAssumptions, overrides: dict[str, Any]) -> ModelA
         ValidationError: If the overrides produce invalid assumptions.
     """
     return ModelAssumptions.model_validate(deep_merge(base.model_dump(mode="json"), overrides))
+
+
+def apply_shifts(base: ModelAssumptions, shifts: dict[str, float]) -> ModelAssumptions:
+    """Add ``shifts`` (dotted paths) to the base values and re-validate.
+
+    Raises:
+        KeyError: If a path does not exist.
+        ValidationError: If a shifted value is invalid (e.g. margins below opex).
+    """
+    data = base.model_dump(mode="json")
+    for path, delta in shifts.items():
+        *parents, leaf = path.split(".")
+        node = data
+        for key in parents:
+            node = node[key]
+        value = node[leaf]
+        node[leaf] = [v + delta for v in value] if isinstance(value, list) else value + delta
+    return ModelAssumptions.model_validate(data)
 
 
 @dataclass(frozen=True)
@@ -174,7 +203,8 @@ def run_scenarios(schema: FinancialStatementSchema, base: ModelAssumptions,
     """
     results = []
     for spec in specs:
-        model = build_model(schema, apply_overrides(base, spec.overrides))
+        assumptions = apply_shifts(apply_overrides(base, spec.overrides), spec.shifts)
+        model = build_model(schema, assumptions)
         results.append(ScenarioResult(spec.name, spec.description, model,
                                       scenario_metrics(model)))
         logger.info("Scenario %-5s IRR %6.1f%%  MOIC %.2fx  DCF $%.2f / $%.2f", spec.name,
@@ -287,7 +317,14 @@ def run_sensitivities(model: ValuationModel, grids: SensitivityGrids) -> Sensiti
     dcf_mw = _grid(multiples, waccs, lambda m, w: run_dcf(
         p, s, a, wacc=w, exit_multiple=m).exit.implied_share_price)
 
-    entries, debts = grids.lbo_entry_multiples, grids.lbo_debt_pcts
+    tx0 = a.transaction
+    entries = grids.lbo_entry_multiples or [
+        round(m, 4) for m in centred_axis(tx0.entry_ev_ebitda_multiple,
+                                          grids.lbo_entry_multiple_step, n) if m > 0]
+    debts = grids.lbo_debt_pcts or [
+        round(min(max(d, 0.05), 0.90), 4)
+        for d in centred_axis(tx0.debt_pct_of_entry_ev, grids.lbo_debt_pct_step, n)]
+    debts = sorted(set(debts))
     lbo_runs: dict[tuple[float, float], LBOResult | None] = {}
     for e in entries:
         for d in debts:
@@ -506,6 +543,20 @@ def _clean(value: Any) -> Any:
     return value
 
 
+LARGEST_LBO_EV = 100_000.0
+"""USD millions. No leveraged buyout has come close to $100B of enterprise value."""
+
+
+def deal_framing(entry_ev: float) -> str:
+    """One-line framing of the LBO for the memo, scaled to the deal size."""
+    if entry_ev > LARGEST_LBO_EV:
+        return ("Hypothetical take-private stress test. At this size the company is far "
+                "larger than any leveraged buyout ever completed; the analysis tests whether "
+                "a sponsor could earn its hurdle rate, not whether financing exists.")
+    return ("Illustrative take-private analysis: could a financial sponsor buying the "
+            "company at a control premium earn its hurdle rate?")
+
+
 def analysis_context(analysis: AnalysisResult) -> dict[str, Any]:
     """Structured, JSON-serializable summary of the analysis (the memo's data pack).
 
@@ -520,9 +571,9 @@ def analysis_context(analysis: AnalysisResult) -> dict[str, Any]:
                     "fiscal_year_end": s.metadata.fiscal_year_end.isoformat(),
                     "source": f"{s.metadata.filing_type} for fiscal year {y0}"},
         "units": "USD millions unless stated; rates and returns as decimals",
-        "framing": ("Hypothetical take-private stress test. The company is far larger than "
-                    "any leveraged buyout ever completed; the analysis tests whether a "
-                    "sponsor could earn its hurdle rate, not whether financing exists."),
+        "framing": deal_framing(lbo.entry["entry_ev"]),
+        "data_source": s.data_source,
+        "data_notes": s.derivation_notes,
         "historicals": {
             "net_sales": {y: s.income_statement(y).net_sales for y in s.years},
             "ebitda": {y: s.ebitda(y) for y in s.years},
@@ -591,18 +642,58 @@ def analysis_context(analysis: AnalysisResult) -> dict[str, Any]:
     })
 
 
+GENERIC_SCENARIOS = Path(__file__).resolve().parents[1] / "config" / "scenarios_generic.json"
+
+
+def load_company(source: str, *, ticker: str | None = None,
+                 fiscal_year: int | None = None) -> FinancialStatementSchema:
+    """Load historicals from a ticker, an EDGAR ``.htm`` 10-K, a 10-K PDF/text, or an
+    extracted JSON file.
+
+    Args:
+        source: Ticker / CIK (looked up on SEC EDGAR) or a file path.
+        ticker: Ticker to record for file inputs.
+        fiscal_year: For ticker lookups, the 10-K's fiscal year (default: latest).
+    """
+    path = Path(source)
+    if path.is_file():
+        if path.suffix.lower() in (".htm", ".html", ".xhtml"):
+            from src.xbrl_mapping import schema_from_htm
+
+            return schema_from_htm(str(path), ticker=ticker)
+        return load_schema(path, ticker)
+    from src.xbrl_mapping import schema_from_ticker
+
+    return schema_from_ticker(source, fiscal_year)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI: model + scenarios + sensitivities -> workbook, analysis JSON and IC memo.
+    """CLI: any 10-K -> 3-statement model, DCF, LBO, scenarios -> workbook, data pack, memo.
+
+    Examples::
+
+        python -m src.analyzer MSFT --share-price 420
+        python -m src.analyzer path/to/10-k.htm --share-price 55.10
+        python -m src.analyzer data/raw/apple_10k_fy2015.pdf          # Apple sample
 
     Returns:
         Process exit code.
     """
-    parser = argparse.ArgumentParser(description="Stress-test the model and write the IC memo.")
-    parser.add_argument("source", type=Path, help="10-K PDF/text, or extracted JSON")
-    parser.add_argument("--ticker", help="Exchange ticker, e.g. AAPL")
+    parser = argparse.ArgumentParser(description="Value any company from its 10-K.")
+    parser.add_argument("source", help="Ticker or CIK (SEC lookup), an EDGAR 10-K .htm, a "
+                                       "10-K PDF/text, or extracted JSON")
+    parser.add_argument("--share-price", type=float,
+                        help="Current share price (USD). Required except for the Apple "
+                             "sample, which uses config/assumptions.json")
+    parser.add_argument("--fiscal-year", type=int, help="Fiscal year of the 10-K (ticker lookup)")
+    parser.add_argument("--ticker", help="Ticker to record for file inputs")
+    parser.add_argument("--overrides", type=Path,
+                        help="JSON file deep-merged over the derived assumptions")
     parser.add_argument("--assumptions", type=Path, default=Path("config/assumptions.json"))
     parser.add_argument("--scenarios", type=Path, default=Path("config/scenarios.json"))
-    parser.add_argument("--out-dir", type=Path, default=Path("outputs"))
+    parser.add_argument("--out-dir", type=Path,
+                        help="Output folder (default: outputs/ for the sample, "
+                             "outputs/<TICKER>/ otherwise)")
     parser.add_argument("--offline", action="store_true",
                         help="Write the memo from the deterministic template (no API call)")
     parser.add_argument("--model", default=None, help="Claude model for the memo narrative")
@@ -611,17 +702,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)-8s %(name)s: %(message)s")
 
+    from src.auto_assumptions import derive_assumptions
     from src.excel_export import write_workbook
     from src.memo_generator import MemoGenerationError, generate_memo
 
     try:
-        schema = load_schema(args.source, args.ticker)
-        analysis = run_analysis(schema, ModelAssumptions.from_json(args.assumptions),
-                                AnalysisConfig.from_json(args.scenarios))
+        schema = load_company(args.source, ticker=args.ticker, fiscal_year=args.fiscal_year)
+        if args.share_price is None:
+            if schema.data_source != "pdf":
+                parser.error("--share-price is required to value this company")
+            assumptions = ModelAssumptions.from_json(args.assumptions)
+            config = AnalysisConfig.from_json(args.scenarios)
+            out_dir = args.out_dir or Path("outputs")
+        else:
+            overrides = (json.loads(args.overrides.read_text(encoding="utf-8"))
+                         if args.overrides else None)
+            assumptions = derive_assumptions(schema, args.share_price, overrides)
+            config = AnalysisConfig.from_json(GENERIC_SCENARIOS)
+            slug = schema.metadata.ticker or schema.metadata.name.split()[0]
+            out_dir = args.out_dir or Path("outputs") / re.sub(r"[^A-Za-z0-9_-]", "", slug)
+        analysis = run_analysis(schema, assumptions, config)
     except (FinancialDataError, ValidationError) as exc:
         logger.error("%s", exc)
         return 1
 
+    args.out_dir = out_dir
     args.out_dir.mkdir(parents=True, exist_ok=True)
     context = analysis_context(analysis)
     try:

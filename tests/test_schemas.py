@@ -146,7 +146,7 @@ def test_beginning_cash_ties_to_prior_balance_sheet(apple_payload: dict[str, Any
     cf["net_change_in_cash"] -= 100
     with pytest.raises(AccountingIdentityError) as exc:
         FinancialStatementSchema.model_validate(apple_payload)
-    assert_breach(exc, "CFS beginning = prior-year BS")
+    assert_breach(exc, "CFS beginning (ex. restricted) = prior-year BS")
 
 
 def test_segments_must_sum_to_net_sales(apple_payload: dict[str, Any]) -> None:

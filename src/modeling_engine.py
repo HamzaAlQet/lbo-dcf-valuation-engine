@@ -70,17 +70,29 @@ WORKING_CAPITAL_DRIVERS: dict[str, tuple[str, str, str]] = {
 
 OPERATING_DRIVERS: tuple[str, ...] = (
     "revenue_growth", "gross_margin", "rd_pct_sales", "sga_pct_sales",
-    "da_pct_sales", "capex_pct_sales", "tax_rate",
+    "other_opex_pct_sales", "da_pct_sales", "capex_pct_sales", "tax_rate",
 )
 
 HELD_FLAT_BALANCES: tuple[str, ...] = (
     "short_term_investments", "deferred_tax_assets_current", "long_term_investments",
-    "goodwill", "intangible_assets", "other_non_current_assets", "commercial_paper",
-    "current_portion_long_term_debt", "deferred_revenue_non_current", "long_term_debt",
-    "other_non_current_liabilities", "common_stock_and_apic",
-    "accumulated_other_comprehensive_income",
+    "goodwill", "commercial_paper", "current_portion_long_term_debt",
+    "deferred_revenue_non_current", "long_term_debt", "other_non_current_liabilities",
+    "common_stock_and_apic", "accumulated_other_comprehensive_income", "other_equity",
+    "noncontrolling_interest",
 )
-"""Balance sheet lines with no operating driver; held at base-year values."""
+"""Balance sheet lines with no operating driver; held at base-year values.
+
+Also driven, but not by an operating ratio: net PP&E, intangibles and other
+non-current assets absorb capex less D&A (in that order, see
+:func:`depreciate_fixed_assets`), and short-term debt carries revolver draws."""
+
+FUNDED_DEBT: tuple[str, ...] = (
+    "commercial_paper", "short_term_debt", "current_portion_long_term_debt", "long_term_debt",
+)
+"""Balance sheet lines that bear interest."""
+
+MAX_IMPLIED_COST_OF_DEBT: float = 0.25
+"""Cap on the cost of debt implied from interest expense (guards against tiny debt)."""
 
 
 def working_capital_ratio(balance: float, base: float, kind: str) -> float:
@@ -120,21 +132,59 @@ def base_working_capital_drivers(schema: FinancialStatementSchema, year: int) ->
     }
 
 
+def depreciate_fixed_assets(ppe: float, intangibles: float, other: float, capex: float,
+                            da: float) -> tuple[float, float, float]:
+    """Roll forward net PP&E, intangibles and other non-current assets.
+
+    Capex adds to PP&E and D&A reduces it. D&A beyond the available PP&E (common
+    where D&A is mostly amortization of acquired intangibles) reduces intangibles,
+    then other non-current assets, so no asset balance turns negative.
+
+    Returns:
+        ``(ppe, intangibles, other_non_current_assets)`` at year end.
+    """
+    excess = max(da - capex - ppe, 0.0)            # D&A not absorbed by PP&E
+    new_ppe = max(ppe + capex - da, 0.0)
+    from_intangibles = min(excess, intangibles)
+    return new_ppe, intangibles - from_intangibles, other - (excess - from_intangibles)
+
+
+def implied_cost_of_debt(schema: FinancialStatementSchema) -> float | None:
+    """Latest-year interest expense / average funded debt, capped at
+    :data:`MAX_IMPLIED_COST_OF_DEBT`. ``None`` if interest expense is not reported
+    or the average debt cannot be computed."""
+    y0 = schema.latest_year
+    interest = schema.reported_interest_expense.get(y0)
+    years = sorted(b.fiscal_year for b in schema.balance_sheets)
+    if interest is None or y0 - 1 not in years:
+        return None
+    avg_debt = (schema.balance_sheet(y0).total_debt + schema.balance_sheet(y0 - 1).total_debt) / 2
+    if avg_debt <= 0:
+        return 0.0
+    return min(max(interest / avg_debt, 0.0), MAX_IMPLIED_COST_OF_DEBT)
+
+
 def blended_cost_of_debt(schema: FinancialStatementSchema, market: MacroAssumptions) -> float:
-    """Pre-tax cost of debt: the override if given, else the principal-weighted
-    effective rate of term debt and commercial paper from the debt note.
+    """Pre-tax cost of debt, in order of preference:
+
+    1. the override in ``market.pre_tax_cost_of_debt``;
+    2. the principal-weighted effective rate from the extracted debt note;
+    3. the rate implied by interest expense over average funded debt.
 
     Raises:
-        AssumptionError: If the company has debt but no debt schedule and no override.
+        AssumptionError: If the company has debt and none of the above is available.
     """
     if market.pre_tax_cost_of_debt is not None:
         return market.pre_tax_cost_of_debt
     ds = schema.debt_schedule
     if ds is None:
+        implied = implied_cost_of_debt(schema)
+        if implied is not None:
+            return implied
         if schema.balance_sheet(schema.latest_year).total_debt > 0:
             raise AssumptionError(
-                "Company has debt but no debt schedule was extracted; "
-                "set market.pre_tax_cost_of_debt"
+                "Company has debt but neither a debt note nor interest expense was "
+                "extracted; set market.pre_tax_cost_of_debt"
             )
         return 0.0
     cp_rate = ds.commercial_paper_rate or 0.0
@@ -260,27 +310,25 @@ def project_statements(schema: FinancialStatementSchema,
         cogs = sales * (1 - d["gross_margin"])
         rd = sales * d["rd_pct_sales"]
         sga = sales * d["sga_pct_sales"]
-        ebit = (sales - cogs) - (rd + sga)
+        other_opex = sales * d["other_opex_pct_sales"]
+        opex = rd + sga + other_opex
+        ebit = (sales - cogs) - opex
         da = sales * d["da_pct_sales"]
         interest_income = d["interest_income_yield"] * (
             prev["cash_and_equivalents"] + prev["short_term_investments"]
             + prev["long_term_investments"]
         )
-        interest_expense = d["cost_of_debt"] * (
-            prev["commercial_paper"] + prev["current_portion_long_term_debt"]
-            + prev["long_term_debt"]
-        )
+        interest_expense = d["cost_of_debt"] * sum(prev[k] for k in FUNDED_DEBT)
         pretax = ebit + interest_income - interest_expense
         tax = pretax * d["tax_rate"]
         net_income = pretax - tax
-        dividends = net_income * d["dividend_payout_ratio"]
-        buybacks = net_income * d["buyback_pct_net_income"]
         capex = sales * d["capex_pct_sales"]
 
         inc = {
             "net_sales": sales, "cost_of_sales": cogs, "gross_margin": sales - cogs,
             "research_and_development": rd, "selling_general_administrative": sga,
-            "total_operating_expenses": rd + sga, "operating_income": ebit,
+            "other_operating_expenses": other_opex,
+            "total_operating_expenses": opex, "operating_income": ebit,
             "depreciation_and_amortization": da, "ebitda": ebit + da,
             "interest_income": interest_income, "interest_expense": interest_expense,
             "other_income_expense": interest_income - interest_expense,
@@ -292,8 +340,9 @@ def project_statements(schema: FinancialStatementSchema,
         bal = {k: prev[k] for k in HELD_FLAT_BALANCES}
         for key, (field, base, kind) in WORKING_CAPITAL_DRIVERS.items():
             bal[field] = working_capital_balance(d[key], inc[base], kind)
-        bal["ppe_net"] = prev["ppe_net"] + capex - da
-        bal["retained_earnings"] = prev["retained_earnings"] + net_income - dividends - buybacks
+        bal["ppe_net"], bal["intangible_assets"], bal["other_non_current_assets"] = (
+            depreciate_fixed_assets(prev["ppe_net"], prev["intangible_assets"],
+                                    prev["other_non_current_assets"], capex, da))
 
         # ---- Cash flow statement
         def delta(field: str, _bal: dict[str, float] = bal) -> float:
@@ -310,15 +359,30 @@ def project_statements(schema: FinancialStatementSchema,
             "change_deferred_revenue": delta("deferred_revenue_current"),
             "change_other_liabilities": delta("accrued_expenses"),
             "capital_expenditures": -capex,
-            "dividends_paid": -dividends,
-            "share_repurchases": -buybacks,
         }
         cf["cash_from_operations"] = sum(cf.get(f, 0.0) for f in CashFlowStatement.OPERATING)
         cf["cash_from_investing"] = sum(cf.get(f, 0.0) for f in CashFlowStatement.INVESTING)
+
+        # Term debt is held flat. A cash shortfall before distributions is drawn on a
+        # revolver (short-term debt, interest from next year); distributions apply to
+        # positive earnings and are funded from the cash left, dividends first.
+        pre_financing = (cf["beginning_cash"] + cf["cash_from_operations"]
+                         + cf["cash_from_investing"])
+        revolver_draw = max(-pre_financing, 0.0)
+        available = max(pre_financing, 0.0)
+        dividends = min(max(net_income, 0.0) * d["dividend_payout_ratio"], available)
+        buybacks = min(max(net_income, 0.0) * d["buyback_pct_net_income"],
+                       max(available - dividends, 0.0))
+        cf["proceeds_from_debt_net"] = revolver_draw
+        cf["dividends_paid"], cf["share_repurchases"] = -dividends, -buybacks
         cf["cash_from_financing"] = sum(cf.get(f, 0.0) for f in CashFlowStatement.FINANCING)
+        bal["short_term_debt"] = prev["short_term_debt"] + revolver_draw
+        bal["retained_earnings"] = prev["retained_earnings"] + net_income - dividends - buybacks
         cf["net_change_in_cash"] = (cf["cash_from_operations"] + cf["cash_from_investing"]
                                     + cf["cash_from_financing"])
         cf["ending_cash"] = cf["beginning_cash"] + cf["net_change_in_cash"]
+        if -1e-6 < cf["ending_cash"] < 0:  # floating-point residue when cash is fully used
+            cf["ending_cash"] = 0.0
 
         # ---- Close the balance sheet with CFS cash, then compute subtotals
         bal["cash_and_equivalents"] = cf["ending_cash"]
@@ -402,6 +466,7 @@ class DCFResult:
     sum_pv_fcf: float
     cash_and_investments: float
     total_debt: float
+    noncontrolling_interest: float
     repatriation_tax: float
     gordon: TerminalValueResult
     exit: TerminalValueResult
@@ -516,7 +581,8 @@ def run_dcf(projection: Projection, schema: FinancialStatementSchema,
     def value(method: str, tv: float, cross_check: float) -> TerminalValueResult:
         pv_tv = tv * terminal_discount
         ev = sum_pv + pv_tv
-        equity = ev + bs.cash_and_investments - bs.total_debt - repat_tax
+        equity = (ev + bs.cash_and_investments - bs.total_debt - bs.noncontrolling_interest
+                  - repat_tax)
         price = equity / shares
         return TerminalValueResult(
             method=method, terminal_value=tv, pv_terminal_value=pv_tv,
@@ -531,7 +597,7 @@ def run_dcf(projection: Projection, schema: FinancialStatementSchema,
         wacc=wacc_result, terminal_growth_rate=g, exit_multiple=multiple,
         schedule=schedule, sum_pv_fcf=sum_pv,
         cash_and_investments=bs.cash_and_investments, total_debt=bs.total_debt,
-        repatriation_tax=repat_tax,
+        noncontrolling_interest=bs.noncontrolling_interest, repatriation_tax=repat_tax,
         gordon=value("Gordon Growth", tv_gordon, tv_gordon / final_ebitda),
         exit=value("Exit Multiple", tv_exit,
                    (tv_exit * r - final_fcf) / (tv_exit + final_fcf)),
@@ -606,8 +672,13 @@ def run_lbo(projection: Projection, schema: FinancialStatementSchema,
 
     # ---- Entry valuation
     ltm_ebitda = schema.ebitda(y0)
+    if ltm_ebitda <= 0:
+        raise AssumptionError(
+            f"LTM EBITDA is {ltm_ebitda:,.0f}: an LBO needs positive EBITDA to size debt")
     entry_ev = entry_mult * ltm_ebitda
-    equity_purchase = entry_ev - bs.total_debt + bs.cash_and_investments
+    # Minority interests stay outstanding: the sponsor buys the parent's equity only.
+    equity_purchase = (entry_ev - bs.total_debt - bs.noncontrolling_interest
+                       + bs.cash_and_investments)
     shares = schema.diluted_shares_outstanding
     offer_price = equity_purchase / shares
 
@@ -646,6 +717,7 @@ def run_lbo(projection: Projection, schema: FinancialStatementSchema,
     entry = {
         "ltm_ebitda": ltm_ebitda, "entry_multiple": entry_mult, "entry_ev": entry_ev,
         "existing_debt": bs.total_debt, "cash_and_investments": bs.cash_and_investments,
+        "noncontrolling_interest": bs.noncontrolling_interest,
         "equity_purchase_price": equity_purchase, "diluted_shares": shares,
         "offer_price_per_share": offer_price,
         "offer_premium": offer_price / market.share_price - 1,
@@ -725,7 +797,7 @@ def run_lbo(projection: Projection, schema: FinancialStatementSchema,
     exit_ev = exit_mult * exit_ebitda
     trapped_after_tax = trapped_cash * (1 - repat_rate)
     exit_equity = (exit_ev - schedule.at["total_debt", last] + schedule.at["ending_cash", last]
-                   + trapped_after_tax)
+                   + trapped_after_tax - bs.noncontrolling_interest)
     flows = [-sponsor_equity] + [0.0] * (len(years) - 1) + [float(exit_equity)]
     exit_ = {
         "exit_year": float(last), "exit_ebitda": exit_ebitda, "exit_multiple": exit_mult,
